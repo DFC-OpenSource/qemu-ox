@@ -881,10 +881,10 @@ void nvme_post_cqes (void *opaque)
     core.nvm_pcie->ops->isr_notify(cq);
 }
 
-inline void nvme_set_error_page (NvmeCtrl *n, uint16_t sqid, uint16_t cid,
+/*inline void nvme_set_error_page (NvmeCtrl *n, uint16_t sqid, uint16_t cid,
 		uint16_t status, uint16_t location, uint64_t lba, uint32_t nsid)
 {
-    /* TODO: Not completely implemented */
+    // TODO: Not completely implemented
 
     NvmeErrorLog *elp;
 
@@ -898,7 +898,7 @@ inline void nvme_set_error_page (NvmeCtrl *n, uint16_t sqid, uint16_t cid,
     elp->nsid = nsid;
     n->elp_index = (n->elp_index + 1) % n->id_ctrl.elpe;
     ++n->num_errors;
-}
+}*/
 
 uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
@@ -971,11 +971,7 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 
     if (core.debug)
         printf("\n[%lu] IO CMD 0x%x, nsid: %d, cid: %d\n",
-                   n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);
-
-    /*JUMP*/
-    return 0;
-    /*JUMP*/
+                   n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);    
 
     req->cmd = cmd;
     switch (cmd->opcode) {
