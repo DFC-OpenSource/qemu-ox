@@ -7,7 +7,7 @@
 #define LNVM_SECSZ          0x1000
 #define LNVM_SEC_OOBSZ      0x100
 #define LNVM_SEC_PG         4
-#define LNVM_PG_BLK         512
+#define LNVM_PG_BLK         128
 #define LNVM_CH             8
 #define LNVM_LUN_CH         4
 #define LNVM_PLANES         2
