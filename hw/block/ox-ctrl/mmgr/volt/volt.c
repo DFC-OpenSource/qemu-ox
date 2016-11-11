@@ -1,15 +1,16 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <mqueue.h>
+#include <syslog.h>
 #include "volt.h"
 #include "hw/block/ox-ctrl/include/ssd.h"
 
 static VoltCtrl *volt;
 static struct nvm_mmgr volt_mmgr;
 
-static VoltBlock *volt_get_block(struct nvm_ppa_addr addr){
+/*static VoltBlock *volt_get_block(struct nvm_ppa_addr addr){
     return volt->luns[addr.g.lun].blk_offset + addr.g.blk;
-}
+}*/
 
 static size_t volt_add_mem(int64_t bytes)
 {
@@ -59,7 +60,7 @@ static int volt_init_blocks(void)
 
         VoltPage *pg = blk->pages;
         for (i_pg = 0; i_pg < geo->pg_per_blk; i_pg++) {
-            pg = volt_init_page(pg, page_count);
+            pg = volt_init_page(pg);
             page_count++;
         }
     }
@@ -153,13 +154,15 @@ static void *volt_io_thread (void *arg)
 
         if (ret) {
             log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
-            /* Callback error */
+            volt_callback(cmd); /* error */
             continue;
         }
         
-        /* Callback success */
+        volt_callback(cmd); /* success */
 
     } while (volt->status.active);
+    
+    return NULL;
 }
 
 static int volt_init(void)
@@ -195,6 +198,7 @@ static int volt_init(void)
         
     printf(" [volt: Volatile memory usage: %lu Mb]\n", 
                                       volt->status.allocated_memory / 1048576);
+    return 0;
         
 MEM_CLEAN:
     volt->status.ready = 0;
@@ -202,6 +206,7 @@ MEM_CLEAN:
     printf(" [volt: Not initialized! Memory allocation failed.]\n");
     printf(" [volt: Volatile memory usage: %lu bytes.]\n", 
                                                 volt->status.allocated_memory);
+    return -1;
 }
 
 static int volt_read_page (struct nvm_mmgr_io_cmd *cmd_nvm)
@@ -211,10 +216,10 @@ static int volt_read_page (struct nvm_mmgr_io_cmd *cmd_nvm)
     // VERIFY ADDRESS
     // VERIFY PAGE STATE
 
-    VoltBlock *blk = volt_get_block(addr);
-    memcpy(/*prp*/,&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size],/*len*/);
+    //VoltBlock *blk = volt_get_block(addr);
+    //memcpy(/*prp*/,&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size],/*len*/);
     
-    printf("15 first chars read: %.15s\n",(char *)/*prp*/);
+    //printf("15 first chars read: %.15s\n",(char *)/*prp*/);
 
     return 0;
 }
@@ -231,18 +236,18 @@ static int volt_write_page (struct nvm_mmgr_io_cmd *cmd_nvm)
     // MODIFY PAGE STATE
     // MODIFY NEXT PAGE
 
-    VoltBlock *blk = volt_get_block(addr);
-    memcpy(&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size],/*prp*/,/*len*/);
+    //VoltBlock *blk = volt_get_block(addr);
+    //memcpy(&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size],/*prp*/,/*len*/);
     
-    printf("15 first chars written: %.15s\n",
-                   (char *)&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size]);
+   // printf("15 first chars written: %.15s\n",
+   //                (char *)&blk->data[addr.g.pg * volt_mmgr.geometry->pg_size]);
 
     return 0;
 }
 
 static int volt_erase_blk (struct nvm_mmgr_io_cmd *cmd_nvm)
 {
-    
+    return 0;
 }
 
 static void volt_exit (struct nvm_mmgr *mmgr)
@@ -293,9 +298,9 @@ int mmgr_volt_init(void)
 
     ret = volt_init();
     if(ret) {
-        log_err(LOG_ERR, "volt: Not possible to start VOLT.");
+        log_err(" [volt: Not possible to start VOLT.]\n");
         return -1;
     }
 
-    return nvm_register_mmgr(&volt);
+    return nvm_register_mmgr(&volt_mmgr);
 }

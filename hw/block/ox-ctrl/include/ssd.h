@@ -18,7 +18,8 @@
 
 #define LIGHTNVM            1
 #define INIT_DFC            1
-#define MMGR_DFCNAND        1
+#define MMGR_DFCNAND        0
+#define MMGR_VOLT           1
 #define FTL_LNVMFTL         1
 
 #include <sys/queue.h>
@@ -416,6 +417,7 @@ int  nvm_submit_multi_plane_sync_io (struct nvm_channel *,
 
 /* media managers init function */
 int mmgr_dfcnand_init(void);
+int mmgr_volt_init(void);
 
 /* FTLs init function */
 int ftl_lnvm_init(void);

@@ -4,22 +4,22 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#define VOLT_MEM_ERROR 0
-#define VOLT_MEM_OK 1
-#define VOLT_SECOND 1000000 /* from u-seconds */
+#define VOLT_MEM_ERROR      0
+#define VOLT_MEM_OK         1
+#define VOLT_SECOND         1000000 /* from u-seconds */
 
-#define VOLT_CHIP_COUNT     = 8
-#define VOLT_VIRTUAL_LUNS   = 4
-#define VOLT_BLOCK_COUNT    = 32
-#define VOLT_PAGE_COUNT     = 128
-#define VOLT_SECTOR_COUNT   = 4
-#define VOLT_PLANE_COUNT    = 2
-#define VOLT_PAGE_SIZE      = 0x4000
-#define VOLT_SECTOR_SIZE    = 0x1000
-#define VOLT_OOB_SIZE       = 0x400
+#define VOLT_CHIP_COUNT      8
+#define VOLT_VIRTUAL_LUNS    4
+#define VOLT_BLOCK_COUNT     32
+#define VOLT_PAGE_COUNT      128
+#define VOLT_SECTOR_COUNT    4
+#define VOLT_PLANE_COUNT     2
+#define VOLT_PAGE_SIZE       0x4000
+#define VOLT_SECTOR_SIZE     0x1000
+#define VOLT_OOB_SIZE        0x400
 
 /* should be user-defined */
-#define VOLT_BLK_LIFE 5000
+#define VOLT_BLK_LIFE       5000
 
 #define VOLT_MQ_MAXMSG      64
 #define VOLT_MQ_MSGSIZE     8
@@ -48,14 +48,14 @@ typedef struct VoltLun {
 
 typedef struct VoltCh {
     VoltLun         *lun_offset;
-};
+} VoltCh;
 
 typedef struct VoltCtrl {
     VoltStatus      status;
     VoltBlock       *blocks;
     VoltLun         *luns;
     VoltCh          *channels;
-    uint16_t        mq_id;
+    int16_t        mq_id;
     pthread_t       io_thread;
 } VoltCtrl;
 

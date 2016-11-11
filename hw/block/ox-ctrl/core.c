@@ -790,6 +790,10 @@ static int nvm_init (void)
     ret = mmgr_dfcnand_init();
     if(ret) goto OUT;
 #endif
+#if MMGR_VOLT
+    ret = mmgr_volt_init();
+    if(ret) goto OUT;
+#endif
     core.run_flag |= RUN_MMGR;
 
     /* flash translation layers */
