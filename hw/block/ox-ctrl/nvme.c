@@ -1106,6 +1106,14 @@ static void nvme_process_sq (void *opaque)
 	status = sq->sqid ?
             nvme_io_cmd (n, &cmd, req) : nvme_admin_cmd (n, &cmd, req);
 
+        /* JUMP */
+        if (sq->sqid) {
+            req->status = NVME_SUCCESS;
+            nvme_enqueue_req_completion (cq, req);
+            goto JUMP;
+        }
+        /* JUMP */
+        
         if (status != NVME_NO_COMPLETE && status != NVME_SUCCESS) {
             sprintf(err, " [ERROR nvme: cmd 0x%x, with cid: %d returned an "
                            "error status: %x\n", cmd.opcode, cmd.cid, status);
@@ -1127,6 +1135,7 @@ static void nvme_process_sq (void *opaque)
             nvme_enqueue_req_completion (cq, req);
 	}
         
+JUMP:
 	processed++;
     }
 

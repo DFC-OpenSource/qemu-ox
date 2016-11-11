@@ -125,7 +125,7 @@ static int dfcnand_dma_helper (io_cmd *cmd)
 
 static int dfcnand_read_page (struct nvm_mmgr_io_cmd *cmd_nvm)
 {
-    io_cmd *cmd = (struct io_cmd *) cmd_nvm->fpga_io;
+    io_cmd *cmd = (struct io_cmd *) cmd_nvm->rsvd;
     int c;
 
     uint32_t sec_sz = NAND_SECTOR_SIZE;
@@ -182,7 +182,7 @@ static int dfcnand_read_page (struct nvm_mmgr_io_cmd *cmd_nvm)
 static int dfcnand_write_page (struct nvm_mmgr_io_cmd *cmd_nvm)
 {
     int c;
-    io_cmd *cmd = (struct io_cmd *) cmd_nvm->fpga_io;
+    io_cmd *cmd = (struct io_cmd *) cmd_nvm->rsvd;
 
     uint32_t sec_sz = NAND_SECTOR_SIZE;
     uint32_t pg_sz  = NAND_PAGE_SIZE;
@@ -237,7 +237,7 @@ CLEAN:
 
 static int dfcnand_erase_blk (struct nvm_mmgr_io_cmd *cmd_nvm)
 {
-    io_cmd *cmd = (struct io_cmd *) cmd_nvm->fpga_io;
+    io_cmd *cmd = (struct io_cmd *) cmd_nvm->rsvd;
     uint16_t phytl = dfcnand_vir_to_phy_lun(cmd_nvm->ppa.g.lun);
     memset(cmd, 0, sizeof(struct io_cmd));
     cmd->dfc_io.nvm_mmgr_io = cmd_nvm;
