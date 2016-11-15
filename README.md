@@ -1,15 +1,16 @@
 #QEMU IMPLEMENTATION FOR OX CONTROLLER
 
-This QEMU version implements the OX Controller that runs in the DFC Card as Open-Channel SSD.
+This QEMU version implements the OX Controller running in the DFC Card, exposing it as Open-Channel SSD.
 
-Compile:
+Compiling QEMU:
 
 ```
 $ ./configure
 $ make -j16
 ```
 
-Please use the follow command to run QEMU (change yout paths and resources):
+Please use the follow command to run QEMU (change yout paths and resources) with OX:
+Install Linux in the image and use the kernel in the repository below.
 
 ```
 sudo ~/git_phd/qemu-ox/x86_64-softmmu/qemu-system-x86_64 -monitor stdio -m 16G -smp 6 -s -drive file=/home/nvme-lab/git_phd/qemu-nvme/disk_images/ubuntuimg,id=diskdrive,format=raw,if=none -device ide-hd,drive=diskdrive -device ox-ctrl,serial=deadbeef -serial pty --enable-kvm
