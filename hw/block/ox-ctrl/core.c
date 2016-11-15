@@ -345,8 +345,8 @@ int nvm_submit_io (struct nvm_io_cmd *io)
 
     } while (ret < 0 && retry);
 
-    if (core.debug)
-        usleep (150000);
+  //  if (core.debug)
+  //      usleep (150000);
 
     return (retry) ? NVME_NO_COMPLETE : NVME_INTERNAL_DEV_ERROR;
 }

@@ -867,6 +867,7 @@ typedef struct NvmeRequest {
     void                     *meta_buf;
     struct nvm_io_cmd        nvm_io;
     uint8_t                  lba_index;
+    QEMUBH                   *bh;
 
 #if LIGHTNVM
     uint64_t                 lightnvm_slba;

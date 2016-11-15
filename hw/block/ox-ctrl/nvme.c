@@ -690,94 +690,6 @@ int nvme_check_sqid (NvmeCtrl *n, uint16_t sqid)
     return sqid < n->num_queues && n->sq[sqid] != NULL ? 0 : -1;
 }
 
-/*static void nvme_update_shadowregs(NvmeQSched *qs)
-{
-    NvmeCtrl *n = nvm_nvme_ctrl;
-    NvmeSQ *sq;
-    int i, j, n_regs = 0, limit = 0, base = 0;
-    uint32_t status_regs[4] = {0,0,0,0};
-    uint32_t current_sq = 0;
-
-    n_regs = ((qs->n_active_iosqs - 1) >> 5) + 1;
-    for(i = 0; i < n_regs; i++){
-	status_regs[i] = *(qs->iodbst_reg + i);
-	current_sq = (~status_regs[i]) & qs->SQID[i];
-        if(current_sq){
-            base = i << 5;
-            limit = (qs->n_active_iosqs < (base + 32)) ?
-                                            (qs->n_active_iosqs - base) : 32;
-            for(j = 0; j < limit; j++) {
-                if(current_sq & (1UL << j)) {
-                    sq = n->sq[(j + 1) + base];
-                    if(sq) {
-                        nvme_update_sq_tail (sq);
-                        if(!nvme_sq_empty(sq)) {
-                            status_regs[i] |= (1UL << j);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pthread_spin_lock(&n->qs_req_spin);
-    for(i = 0; i < NVME_MAX_PRIORITY; i++) {
-    	if(qs->prio_avail[i]) {
-            qs->shadow_regs[i][0] |= (((((uint64_t)status_regs[1]) << 32) +
-                                        status_regs[0]) & qs->mask_regs[i][0]);
-            qs->shadow_regs[i][1] |= (((((uint64_t)status_regs[3]) << 32) +
-                                        status_regs[2]) & qs->mask_regs[i][1]);
-	}
-    }
-    pthread_spin_unlock(&n->qs_req_spin);
-}*/
-
-/*static int nvme_get_best_sqid(NvmeQSched *qs)
-{
-    unsigned int prio = 0, base = 0, i = 0, bit = 0, dw_idx = 0;
-    unsigned int end_ptr = 0, reg_limit_bit = 0, n_regs = 0, q_range = 0;
-    uint64_t tmp = 0x0;
-
-    if (!qs->n_active_iosqs)
-        return 0;
-
-    nvme_update_shadowregs(qs);
-
-    q_range = qs->n_active_iosqs - 1;
-    n_regs = (q_range >> 6) + 1;
-
-    for(prio = 0; prio < NVME_MAX_PRIORITY; prio++) {
-	if(qs->prio_avail[prio]) {
-            dw_idx = qs->prio_lvl_next_q[prio] >> 6;
-            end_ptr = (!qs->prio_lvl_next_q[prio]) ? 0 :
-                        ((qs->prio_lvl_next_q[prio] - 1) & (SHADOW_REG_SZ - 1));
-            for(i = 0; i <= n_regs; i++) {
-		tmp = qs->shadow_regs[prio][dw_idx];
-		if (tmp) {
-                    base = dw_idx << 6;
-                    reg_limit_bit = (i < n_regs) ? (SHADOW_REG_SZ - 1) :
-                                                                       end_ptr;
-                    reg_limit_bit = ((reg_limit_bit + base) <
-                        qs->n_active_iosqs) ? reg_limit_bit : (q_range - base);
-                    for(bit = qs->prio_lvl_next_q[prio] - base; bit <=
-                                                        reg_limit_bit; bit++) {
-			qs->prio_lvl_next_q[prio] = ((bit + 1) &
-                                                    (SHADOW_REG_SZ - 1)) + base;
-			qs->prio_lvl_next_q[prio] = (qs->prio_lvl_next_q[prio]
-                                    > q_range) ? 0 : qs->prio_lvl_next_q[prio];
-			if(tmp & (1UL << bit)) {
-                            return (bit + base + 1);
-			}
-                    }
-		} else {
-                    qs->prio_lvl_next_q[prio] = ((dw_idx + 1) & (~n_regs)) << 6;
-		}
-                    dw_idx = ((dw_idx + 1) & (~n_regs));
-            }
-	}
-    }
-    return 0;
-}*/
-
 static void nvme_post_cqe (NvmeCQ *cq, NvmeRequest *req)
 {
     NvmeCtrl *n = cq->ctrl;
@@ -808,7 +720,9 @@ static void nvme_post_cqe (NvmeCQ *cq, NvmeRequest *req)
     cqe->status = cpu_to_le16((req->status << 1) | phase);
     cqe->sq_id = sq->sqid;
     cqe->sq_head = cpu_to_le16(sq->head);
+
     nvme_addr_write (n, addr, (void *)cqe, sizeof (*cqe));
+
     nvme_inc_cq_tail (cq);
 
     TAILQ_INSERT_TAIL (&sq->req_list, req, entry);
@@ -843,8 +757,17 @@ void nvme_enqueue_req_completion (NvmeCQ *cq, NvmeRequest *req)
     notify = coalesce_disabled || !req->sq->sqid || !time_ns ||
 	req->status != NVME_SUCCESS || nvme_cqes_pending(cq) >= thresh;
 
-    if (notify)
-	core.nvm_pcie->ops->isr_notify(cq);
+    if (!notify) {
+        if (!timer_pending(cq->timer)) {
+            timer_mod(cq->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                    time_ns);
+        }
+    } else {
+        nvme_isr_notify(cq);
+        if (timer_pending(cq->timer)) {
+            timer_del(cq->timer);
+        }
+    }
 }
 
 void nvme_enqueue_event (NvmeCtrl *n, uint8_t event_type,
@@ -878,27 +801,8 @@ void nvme_post_cqes (void *opaque)
             nvme_post_cqe (cq, req);
     }
     pthread_mutex_unlock(&n->req_mutex);
-    core.nvm_pcie->ops->isr_notify(cq);
+    nvme_isr_notify(cq);
 }
-
-/*inline void nvme_set_error_page (NvmeCtrl *n, uint16_t sqid, uint16_t cid,
-		uint16_t status, uint16_t location, uint64_t lba, uint32_t nsid)
-{
-    // TODO: Not completely implemented
-
-    NvmeErrorLog *elp;
-
-    elp = &n->elpes[n->elp_index];
-    elp->error_count = n->num_errors;
-    elp->sqid = sqid;
-    elp->cid = cid;
-    elp->status_field = status;
-    elp->param_error_location = location;
-    elp->lba = lba;
-    elp->nsid = nsid;
-    n->elp_index = (n->elp_index + 1) % n->id_ctrl.elpe;
-    ++n->num_errors;
-}*/
 
 uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
@@ -971,7 +875,7 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 
     if (core.debug)
         printf("\n[%lu] IO CMD 0x%x, nsid: %d, cid: %d\n",
-                   n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);    
+                   n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);
 
     req->cmd = cmd;
     switch (cmd->opcode) {
@@ -1107,13 +1011,13 @@ static void nvme_process_sq (void *opaque)
             nvme_io_cmd (n, &cmd, req) : nvme_admin_cmd (n, &cmd, req);
 
         /* JUMP */
-        if (sq->sqid) {
+ /*       if (sq->sqid) {
             req->status = NVME_SUCCESS;
             nvme_enqueue_req_completion (cq, req);
             goto JUMP;
-        }
+        }*/
         /* JUMP */
-        
+
         if (status != NVME_NO_COMPLETE && status != NVME_SUCCESS) {
             sprintf(err, " [ERROR nvme: cmd 0x%x, with cid: %d returned an "
                            "error status: %x\n", cmd.opcode, cmd.cid, status);
@@ -1134,27 +1038,17 @@ static void nvme_process_sq (void *opaque)
             req->status = status;
             nvme_enqueue_req_completion (cq, req);
 	}
-        
-JUMP:
+
+//JUMP:
 	processed++;
     }
 
-    if (nvme_sq_empty(sq) & (sq->sqid > 0)) {
-        nvme_update_sq_tail (sq);
-	/*if (nvme_sq_empty(sq)) {
-            reg_sqid = sq->sqid - 1;
-            pthread_spin_lock(&n->qs_req_spin);
-            if(n->qsched.WRR) {
-		n->qsched.shadow_regs[sq->prio][reg_sqid >> 6] &=
-                                                           (~(1UL << reg_sqid));
-            } else {
-		n->qsched.round_robin_status_regs[reg_sqid >> 5] &=
-                                                           (~(1UL << reg_sqid));
-            }
-            pthread_spin_unlock(&n->qs_req_spin);
-	}*/
-    }
+    nvme_update_sq_tail (sq);
+
     sq->completed += processed;
+    if (!nvme_sq_empty(sq)) {
+        timer_mod(sq->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 500);
+    }
 }
 
 void nvme_process_db (NvmeCtrl *n, uint64_t addr, uint64_t val)
@@ -1231,84 +1125,6 @@ void nvme_process_db (NvmeCtrl *n, uint64_t addr, uint64_t val)
         }
     }
 }
-
-/*static void weighted_round_robin (NvmeCtrl *n, uint32_t *fifo_count)
-{
-    NvmeQSched *qs = &n->qsched;
-    int sqid = 0;
-
-    do {
-	sqid = nvme_get_best_sqid(qs);
-	if(sqid){
-            nvme_process_sq (n->sq[sqid]);
-	} else {
-            break;
-	}
-    } while (!(*fifo_count));
-}*/
-
-/*static void round_robin (NvmeCtrl *n)
-{
-    uint32_t status_reg = 0;
-    int n_regs = 0, i = 0, j = 0, limit = 0, base = 0;
-    NvmeQSched *qs = &n->qsched;
-    NvmeSQ *sq = NULL;
-
-    n_regs = ((qs->n_active_iosqs - 1) >> 5) + 1;
-    for(i = 0; i < n_regs; i++) {
-    	status_reg = *(qs->iodbst_reg + i);
-    	pthread_spin_lock(&n->qs_req_spin);
-    	qs->round_robin_status_regs[i] |= status_reg;
-    	pthread_spin_unlock(&n->qs_req_spin);
-
-    	base = i << 5;
-	limit = (qs->n_active_iosqs < (base + 32)) ?
-                                               (qs->n_active_iosqs - base) : 32;
-
-    	for(j = 0; j < limit; j++) {
-            if((sq = n->sq[(j + 1) + base])) {
-		if(qs->round_robin_status_regs[i] & (1UL << j)) {
-                    nvme_process_sq(sq);
-		} else {
-                    nvme_update_sq_tail (sq);
-                    if(!nvme_sq_empty(sq)) {
-			nvme_process_sq(sq);
-                    }
-		}
-            }
-	}
-    }
-}*/
-
-/*void nvme_q_scheduler (NvmeCtrl *n, uint32_t *fifo_count)
-{
-    if (n->qsched.WRR > 1 && n->qsched.n_active_iosqs > 0)
-        log_err ("[nvme WARNING: suspicious value on n->qsched.WRR: %d\n",
-                                                                n->qsched.WRR);
-    if(n->qsched.WRR) {
-	weighted_round_robin(n, fifo_count);
-    } else {
-	round_robin(n);
-    }
-}*/
-
-/*static inline int nvme_init_q_scheduler (NvmeCtrl *n)
-{
-    NvmeQSched *qs = &n->qsched;
-    int i;
-
-    if(pthread_spin_init(&n->qs_req_spin,0)) {
-	log_err("[ERROR nvme: qs spin not initialized.]\n");
-        return -1;
-    }
-    //qs->iodbst_reg = nvm_pcie->io_dbstride_ptr;
-
-    for(i = 0;  i < NVME_MAX_PRIORITY; i++) {
-        qs->shadow_regs[i][0] = qs->shadow_regs[i][1] = 0x0;
-	qs->mask_regs[i][0] = qs->mask_regs[i][1] = 0x0;
-    }
-    return 0;
-}*/
 
 void nvme_exit(void)
 {

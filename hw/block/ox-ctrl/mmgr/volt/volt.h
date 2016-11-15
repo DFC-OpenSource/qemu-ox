@@ -19,10 +19,15 @@
 #define VOLT_OOB_SIZE        0x400
 
 #define VOLT_DMA_SLOT_INDEX  8
-#define VOLT_DMA_SLOT_OFF    8      
+#define VOLT_DMA_READ        0x1
+#define VOLT_DMA_WRITE       0x2
 
 /* should be user-defined */
 #define VOLT_BLK_LIFE       5000
+
+#define VOLT_READ_TIME      50
+#define VOLT_WRITE_TIME     200
+#define VOLT_ERASE_TIME     1200
 
 #define VOLT_MQ_MAXMSG      64
 #define VOLT_MQ_MSGSIZE     8
@@ -58,13 +63,11 @@ typedef struct VoltCtrl {
     VoltBlock       *blocks;
     VoltLun         *luns;
     VoltCh          *channels;
-    int16_t        mq_id;
+    int16_t         mq_id;
     pthread_t       io_thread;
 } VoltCtrl;
 
 struct volt_dma {
-    uint16_t        len[32];
-    uint64_t        host_addr[32];
     uint8_t         *virt_addr;
     uint32_t        prp_index;
     uint8_t         status; /* nand status */

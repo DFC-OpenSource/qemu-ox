@@ -63,9 +63,7 @@ static void lnvm_tbl_initialize(uint64_t *tbl, uint32_t len)
 
 uint16_t lnvm_get_l2p_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
-    //NvmeNamespace *ns;
     LnvmGetL2PTbl *gtbl = (LnvmGetL2PTbl*)cmd;
-    //uint64_t slba = gtbl->slba;
     uint32_t nlb = gtbl->nlb;
     uint64_t prp1 = gtbl->prp1;
     uint32_t nsid = gtbl->nsid;
@@ -76,7 +74,6 @@ uint16_t lnvm_get_l2p_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
     if (nsid == 0 || nsid > n->num_namespaces) {
         return NVME_INVALID_NSID | NVME_DNR;
     }
-    //ns = &n->namespaces[nsid - 1];
 
     tbl_sz = nlb * sizeof(uint64_t);
     tbl = calloc (1, tbl_sz);
@@ -139,7 +136,6 @@ uint16_t lnvm_get_bb_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
     }
 
     ppa.ppa= bbtbl->spba;
-    //ns = &n->namespaces[nsid - 1];
     ln = &n->lightnvm_ctrl;
     c = &ln->id_ctrl.groups[0];
 
@@ -234,11 +230,7 @@ uint16_t lnvm_erase_sync(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     if (core.debug)
         lnvm_debug_print_io (req->nvm_io.ppalist, req->nvm_io.prp,
                                                 req->nvm_io.md_prp, nlb, 0, 0);
-    
-    /* JUMP */
-    return 0;
-    /* JUMP */
-    
+
     return nvm_submit_io(&req->nvm_io);
 }
 
@@ -356,11 +348,7 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
     if (core.debug)
         lnvm_debug_print_io (req->nvm_io.ppalist, req->nvm_io.prp,
                                 req->nvm_io.md_prp, nlb, data_size, meta_size);
-    
-    /* JUMP */
-    return 0;
-    /* JUMP */
-    
+
     return nvm_submit_io(&req->nvm_io);
 }
 
@@ -413,7 +401,6 @@ int lnvm_init(NvmeCtrl *n)
 {
     LnvmCtrl *ln;
     LnvmIdGroup *c;
-    //NvmeNamespace *ns;
     unsigned int i, cid;
     uint64_t tot_blks = 0, rsv_blks = 0;
 
@@ -425,7 +412,6 @@ int lnvm_init(NvmeCtrl *n)
         log_info("    [lnvm: Only quad plane mode supported]\n");
 
     for (i = 0; i < n->num_namespaces; i++) {
-        //ns = &n->namespaces[i];
 
         /* For now we export 1 channel containing all LUNs */
         for (cid = 0; cid < core.nvm_ch_count; cid++){
