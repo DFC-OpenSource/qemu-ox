@@ -17,9 +17,9 @@ sudo ~/git_phd/qemu-ox/x86_64-softmmu/qemu-system-x86_64 -monitor stdio -m 16G -
 ```
 You can run some tests from the host using the follow Linux kernel and liblightnvm (user space library for Open-Channel SSDs):
 ```
-https://github.com/ivpi/linux-liblnvm
+Kernel:      https://github.com/ivpi/linux-liblnvm
 
-https://github.com/ivpi/liblightnvm
+Liblightnvm: https://github.com/ivpi/liblightnvm
 ```
 You need to initialize your OX Open-Channel SSD using the nvme-cli:
 ```
