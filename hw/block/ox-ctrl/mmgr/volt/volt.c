@@ -494,7 +494,7 @@ static int volt_set_ch_info (struct nvm_channel *ch, uint16_t nc)
 
 static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
 {
-    int i, n, nsp = 0;
+    int i, n, pl, nsp = 0, trsv;
 
     for(i = 0; i < nc; i++){
         ch[i].ch_mmgr_id = i;
@@ -516,19 +516,21 @@ static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
                        VOLT_PLANE_COUNT *
                        VOLT_PAGE_COUNT;
 
-        ch[i].mmgr_rsv = 3;
-        ch[i].mmgr_rsv_list = malloc (ch[i].mmgr_rsv *
-                                                sizeof(struct nvm_ppa_addr));
+        ch[i].mmgr_rsv = VOLT_RSV_BLK;
+        trsv = ch[i].mmgr_rsv * VOLT_PLANE_COUNT;
+        ch[i].mmgr_rsv_list = malloc (trsv * sizeof(struct nvm_ppa_addr));
+        
         if (!ch[i].mmgr_rsv_list)
             return EMEM;
+        
+        memset (ch[i].mmgr_rsv_list, 0, trsv * sizeof(struct nvm_ppa_addr));
 
-        for (n = 0; n < ch[i].mmgr_rsv; n++)
-            ch[i].mmgr_rsv_list[n].ppa = (uint64_t) (n & 0xffffffffffffffff);
-
-        ch[i].ftl_rsv = 0;
-        ch[i].ftl_rsv_list = malloc (sizeof(struct nvm_ppa_addr));
-        if (!ch[i].ftl_rsv_list)
-            return EMEM;
+        for (n = 0; n < ch[i].mmgr_rsv; n++) {
+            for (pl = 0; pl < VOLT_PLANE_COUNT; pl++) {
+                ch[i].mmgr_rsv_list[VOLT_PLANE_COUNT * n + pl].g.blk = n;
+                ch[i].mmgr_rsv_list[VOLT_PLANE_COUNT * n + pl].g.pl = pl;
+            }
+        }
 
         ch[i].tot_bytes = 0;
         ch[i].slba = 0;

@@ -18,12 +18,13 @@
 #define VOLT_SECTOR_SIZE     0x1000
 #define VOLT_OOB_SIZE        0x400
 
-#define VOLT_DMA_SLOT_INDEX  8
+#define VOLT_DMA_SLOT_INDEX  16
 #define VOLT_DMA_READ        0x1
 #define VOLT_DMA_WRITE       0x2
 
 /* should be user-defined */
 #define VOLT_BLK_LIFE       5000
+#define VOLT_RSV_BLK        1
 
 #define VOLT_READ_TIME      50
 #define VOLT_WRITE_TIME     200
