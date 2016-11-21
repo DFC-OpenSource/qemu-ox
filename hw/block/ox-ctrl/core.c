@@ -333,7 +333,9 @@ int nvm_submit_io (struct nvm_io_cmd *io)
     retry = 16;
     cmd_addr = (uint64_t) io;
 
-    qid = nvm_ftl_q_schedule(ch->ftl);
+    /* TODO: Make the queues be native per-channel */
+    
+    qid = ch->ch_mmgr_id;//nvm_ftl_q_schedule(ch->ftl);
     do {
         ret = mq_send(ch->ftl->mq_id[qid], (char *) &cmd_addr,
                                                          sizeof (uint64_t), 1);

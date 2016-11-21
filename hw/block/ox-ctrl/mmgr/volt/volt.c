@@ -9,7 +9,7 @@
 static u_atomic_t       nextprp;
 static pthread_mutex_t  prp_mutex;
 static pthread_mutex_t  prpmap_mutex;
-static uint32_t         prp_map;
+static uint64_t         prp_map;
 
 static VoltCtrl             *volt;
 static struct nvm_mmgr      volt_mmgr;
@@ -21,12 +21,12 @@ static int volt_start_prp_map(void)
     nextprp.counter = U_ATOMIC_INIT_RUNTIME(0);
     pthread_mutex_init (&prp_mutex, NULL);
     pthread_mutex_init (&prpmap_mutex, NULL);
-    prp_map = 0x0;
+    prp_map = 0x0 & AND64;
 
     return 0;
 }
 
-static void volt_set_prp_map(uint32_t index, uint8_t flag)
+static void volt_set_prp_map(uint64_t index, uint8_t flag)
 {
     pthread_mutex_lock(&prpmap_mutex);
     prp_map = (flag)
@@ -36,7 +36,7 @@ static void volt_set_prp_map(uint32_t index, uint8_t flag)
 }
 
 static uint8_t volt_get_next_prp(struct volt_dma *dma){
-    uint32_t next = 0;
+    uint64_t next = 0;
 
     do {
         pthread_mutex_lock(&prp_mutex);
