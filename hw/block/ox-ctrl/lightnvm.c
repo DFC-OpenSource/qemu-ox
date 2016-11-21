@@ -125,7 +125,7 @@ uint16_t lnvm_set_bb_tbl(NvmeCtrl *n, NvmeCmd *nvmecmd, NvmeRequest *req)
         arg[1] = &value;
         arg[2] = &bbtbl_format;
         
-        ret = nvm_ftl_cap_exec(FTL_CAP_SET_BBTBL, arg, 4);
+        ret = nvm_ftl_cap_exec(FTL_CAP_SET_BBTBL, arg, 3);
         if (ret)
             return NVME_INVALID_FIELD;
     }

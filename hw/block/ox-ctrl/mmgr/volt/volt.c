@@ -9,7 +9,7 @@
 static u_atomic_t       nextprp;
 static pthread_mutex_t  prp_mutex;
 static pthread_mutex_t  prpmap_mutex;
-static uint8_t          prp_map;
+static uint32_t         prp_map;
 
 static VoltCtrl             *volt;
 static struct nvm_mmgr      volt_mmgr;
