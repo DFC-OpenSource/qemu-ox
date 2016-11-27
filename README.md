@@ -1,6 +1,6 @@
 #QEMU IMPLEMENTATION FOR OX CONTROLLER
 
-This QEMU version implements the OX Controller running in the DFC Card, exposing it as Open-Channel SSD.
+This QEMU version implements the OX Controller running in the DFC Card, exposing it as Open-Channel SSD. VOLT Media Manager exposes 4GB of volatile memory as flash storage to be used in QEMU.
 
 Compiling QEMU:
 
@@ -45,11 +45,6 @@ OOB Size per Page   1 KB
 Total of 4352 MB of volatile Open-Channel SSD. You need enough memory available when you start QEMU.
 ```
 
-IMPORTANTE: Please use the Linux kernel 4.8 or higher with the NVME driver for the DFC:
-
-```
-https://github.com/ivpi/nvme-driver-DFC
-```
 A default debug is enable, you can see all Admin and IO commands being printed in the host machine, redirect it to a file or to /dev/null if you don't want to print it. An example of IO command debug:
 
 ```
