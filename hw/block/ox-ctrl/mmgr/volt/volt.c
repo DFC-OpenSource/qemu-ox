@@ -545,7 +545,7 @@ static int volt_init(void)
     res_l = volt_init_luns();
     res_c = volt_init_channels();
     ret = volt_init_dma_buf();
-    volt->mq = ox_mq_init(volt_mmgr.geometry->n_of_ch, 16,
+    volt->mq = ox_mq_init(volt_mmgr.geometry->n_of_ch, VOLT_QUEUE_SIZE,
                                                volt_execute_io, volt_callback);
 
     if (!pages_ok || !res_l || !res_c || ret || !volt->mq)
