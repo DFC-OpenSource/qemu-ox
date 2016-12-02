@@ -10,6 +10,7 @@ common-obj-$(CONFIG_ONENAND) += onenand.o
 common-obj-$(CONFIG_NVME_PCI) += nvme.o
 
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/qemu-init.o
+common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ox-mq.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/cmd_args.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/core.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/lightnvm.o

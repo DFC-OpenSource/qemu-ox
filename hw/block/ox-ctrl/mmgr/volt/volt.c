@@ -5,6 +5,7 @@
 #include "volt.h"
 #include "hw/block/ox-ctrl/include/ssd.h"
 #include "hw/block/ox-ctrl/include/uatomic.h"
+#include "hw/block/ox-ctrl/include/ox-mq.h"
 
 static u_atomic_t       nextprp;
 static pthread_mutex_t  prp_mutex;
@@ -222,9 +223,10 @@ static int volt_host_dma_helper (struct nvm_mmgr_io_cmd *nvm_cmd)
     return ret;
 }
 
-static void volt_callback (struct nvm_mmgr_io_cmd *nvm_cmd)
+static void volt_callback (void *opaque)
 {
     int ret = 0;
+    struct nvm_mmgr_io_cmd *nvm_cmd = (struct nvm_mmgr_io_cmd *) opaque;
     struct volt_dma *dma = (struct volt_dma *) nvm_cmd->rsvd;
 
     if (!nvm_cmd || nvm_cmd->status == NVM_IO_TIMEOUT)
@@ -251,11 +253,11 @@ static void volt_nand_dma (void *paddr, void *buf, size_t sz, uint8_t dir)
     switch (dir) {
         case VOLT_DMA_READ:
             memcpy(buf, paddr, sz);
-            usleep(VOLT_READ_TIME);
+            //usleep(VOLT_READ_TIME);
             break;
         case VOLT_DMA_WRITE:
             memcpy(paddr, buf, sz);
-            usleep(VOLT_WRITE_TIME);
+            //usleep(VOLT_WRITE_TIME);
             break;
     }
 }
@@ -289,7 +291,7 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
             }
             memset(blk->data, 0x0, (geo->pg_size +
                         geo->sec_oob_sz * geo->sec_per_pg) * geo->pg_per_blk);
-            usleep(VOLT_ERASE_TIME);
+            //usleep(VOLT_ERASE_TIME);
             break;
         default:
             dma->status = 0;
@@ -300,52 +302,32 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
     return 0;
 }
 
-static void *volt_io_thread (void *arg)
+static void volt_execute_io (struct ox_mq_entry *req)
 {
-    struct nvm_mmgr_io_cmd *cmd;
-    uint64_t *cmd_addr;
+    struct nvm_mmgr_io_cmd *cmd = (struct nvm_mmgr_io_cmd *) req->opaque;
     int ret;
 
-    volt->status.active = 1;
-    do {
-        cmd = 0;
+    ret = volt_process_io(cmd);
 
-        ret = mq_receive (volt->mq_id, (char *)&cmd_addr,
-                                                      sizeof (uint64_t), NULL);
-        if (ret != VOLT_MQ_MSGSIZE)
-            continue;
+    if (ret) {
+        log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
+        cmd->status = NVM_IO_FAIL;
+        goto COMPLETE;
+    }
 
-        cmd = (struct nvm_mmgr_io_cmd *) cmd_addr;
-	if(cmd == NULL)
-            continue;
+    cmd->status = NVM_IO_SUCCESS;
 
-        ret = volt_process_io(cmd);
-
-        if (ret) {
-            log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
-            cmd->status = NVM_IO_FAIL;
-            volt_callback(cmd); /* error */
-            continue;
-        }
-
-        cmd->status = NVM_IO_SUCCESS;
-        volt_callback(cmd); /* success */
-
-    } while (volt->status.active);
-
-    return NULL;
+COMPLETE:
+    ox_mq_complete_req(volt->mq, req);
 }
 
 static int volt_enqueue_io (struct nvm_mmgr_io_cmd *io)
 {
     int ret, retry;
-    uint64_t cmd_addr;
-
-    cmd_addr = (uint64_t) io;
 
     retry = 16;
     do {
-        ret = mq_send(volt->mq_id, (char *) &cmd_addr, sizeof (uint64_t), 1);
+        ret = ox_mq_submit_req(volt->mq, io->ppa.g.ch, io);
     	if (ret < 0)
             retry--;
         else if (core.debug)
@@ -477,7 +459,7 @@ static void volt_exit (struct nvm_mmgr *mmgr)
     volt_clean_mem();
     volt_free_dma_buf();
     volt->status.active = 0;
-    mq_close(volt->mq_id);
+    ox_mq_destroy(volt->mq);
     pthread_mutex_destroy(&prp_mutex);
     pthread_mutex_destroy(&prpmap_mutex);
     for (i = 0; i < mmgr->geometry->n_of_ch; i++) {
@@ -519,10 +501,10 @@ static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
         ch[i].mmgr_rsv = VOLT_RSV_BLK;
         trsv = ch[i].mmgr_rsv * VOLT_PLANE_COUNT;
         ch[i].mmgr_rsv_list = malloc (trsv * sizeof(struct nvm_ppa_addr));
-        
+
         if (!ch[i].mmgr_rsv_list)
             return EMEM;
-        
+
         memset (ch[i].mmgr_rsv_list, 0, trsv * sizeof(struct nvm_ppa_addr));
 
         for (n = 0; n < ch[i].mmgr_rsv; n++) {
@@ -563,20 +545,11 @@ static int volt_init(void)
     res_l = volt_init_luns();
     res_c = volt_init_channels();
     ret = volt_init_dma_buf();
+    volt->mq = ox_mq_init(volt_mmgr.geometry->n_of_ch, 16,
+                                               volt_execute_io, volt_callback);
 
-    if (!pages_ok || !res_l || !res_c || ret)
+    if (!pages_ok || !res_l || !res_c || ret || !volt->mq)
         goto MEM_CLEAN;
-
-    mq_unlink ("/volt");
-    struct mq_attr mqAttr = {0, VOLT_MQ_MAXMSG, VOLT_MQ_MSGSIZE, 0};
-    volt->mq_id = mq_open ("/volt", O_RDWR|O_CREAT, S_IWUSR|S_IRUSR, &mqAttr);
-    if (volt->mq_id < 0)
-	return -1;
-
-    if(pthread_create(&volt->io_thread, NULL, volt_io_thread, NULL))
-        return -1;
-
-    log_info(" [volt: Volt IO Queue started.]\n");
 
     volt->status.ready = 1; /* ready to use */
 
