@@ -24,6 +24,7 @@
 
 #include <sys/queue.h>
 #include <stdint.h>
+#include <syslog.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <time.h>
