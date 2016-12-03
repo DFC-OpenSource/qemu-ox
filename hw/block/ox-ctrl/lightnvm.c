@@ -107,24 +107,24 @@ uint16_t lnvm_set_bb_tbl(NvmeCtrl *n, NvmeCmd *nvmecmd, NvmeRequest *req)
     uint64_t spba = cmd->spba;
     uint16_t nlb = cmd->nlb + 1;
     uint8_t value = cmd->value;
-    
+
     psl = malloc (sizeof(struct nvm_ppa_addr) * nlb);
     if (!psl)
         return NVME_INTERNAL_DEV_ERROR;
-    
+
     if (nlb > 1) {
         nvme_read_from_host((void *)psl, spba, nlb * sizeof(uint64_t));
     } else {
         psl[0].ppa = spba;
     }
-    
+
     for(i = 0; i < nlb; i++) {
         /* set single block to FTL */
         psl[i].g.sec = 0;
         arg[0] = &psl[i].ppa;
         arg[1] = &value;
         arg[2] = &bbtbl_format;
-        
+
         ret = nvm_ftl_cap_exec(FTL_CAP_SET_BBTBL, arg, 3);
         if (ret)
             return NVME_INVALID_FIELD;
@@ -248,7 +248,7 @@ uint16_t lnvm_erase_sync(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         lnvm_debug_print_io (req->nvm_io.ppalist, req->nvm_io.prp,
                                                 req->nvm_io.md_prp, nlb, 0, 0);
 
-    return nvm_submit_io(&req->nvm_io);
+    return nvm_submit_ftl(&req->nvm_io);
 }
 
 static inline uint64_t nvme_gen_to_dev_addr(LnvmCtrl *ln,struct nvm_ppa_addr *r)
@@ -366,7 +366,7 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
         lnvm_debug_print_io (req->nvm_io.ppalist, req->nvm_io.prp,
                                 req->nvm_io.md_prp, nlb, data_size, meta_size);
 
-    return nvm_submit_io(&req->nvm_io);
+    return nvm_submit_ftl(&req->nvm_io);
 }
 
 static int lightnvm_flush_tbls(NvmeCtrl *n)

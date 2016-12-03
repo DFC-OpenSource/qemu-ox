@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include "hw/block/ox-ctrl/include/uatomic.h"
+#include "hw/block/ox-ctrl/include/ox-mq.h"
 #include "qemu/osdep.h"
 #include "hw/block/block.h"
 #include "hw/pci/msix.h"
@@ -40,9 +41,9 @@
         OBJECT_CHECK(QemuOxCtrl, (obj), TYPE_OX)
 
 #define MAX_NAME_SIZE           31
-#define NVM_FTL_MQ             "/nvm_mq"
-#define NVM_FTL_MQ_MSGSIZE     8
-#define NVM_FTL_MQ_MAXMSG      64
+#define NVM_QUEUE_RETRY         16
+#define NVM_QUEUE_RETRY_SLEEP   500
+#define NVM_FTL_QUEUE_SIZE      64
 
 #define NVM_SYNCIO_TO          10
 #define NVM_SYNCIO_FLAG_BUF    0x1
@@ -128,6 +129,7 @@ struct nvm_io_cmd {
     struct nvm_io_status        status;
     struct nvm_mmgr_io_cmd      mmgr_io[64];
     void                        *req;
+    void                        *mq_req;
     uint64_t                    prp[64];
     uint64_t                    md_prp[64];
     uint32_t                    sec_sz;
@@ -291,10 +293,7 @@ struct nvm_ftl {
     uint32_t                cap; /* Capability bits */
     uint16_t                bbtbl_format;
     uint8_t                 nq; /* Number of queues/threads, up to 64 per FTL */
-    int16_t                 mq_id[64];
-    pthread_t               io_thread[64];
-    uint8_t                 last_q;
-    pthread_mutex_t         q_mutex;
+    struct ox_mq            *mq;
     uint8_t                 active;
     LIST_ENTRY(nvm_ftl)     entry;
 };
@@ -401,10 +400,10 @@ struct core_struct {
 int  nvm_register_mmgr(struct nvm_mmgr *);
 int  nvm_register_pcie_handler(struct nvm_pcie *);
 int  nvm_register_ftl (struct nvm_ftl *);
-int  nvm_submit_io (struct nvm_io_cmd *);
-int  nvm_submit_mmgr_io (struct nvm_mmgr_io_cmd *);
+int  nvm_submit_ftl (struct nvm_io_cmd *);
+int  nvm_submit_mmgr (struct nvm_mmgr_io_cmd *);
+void nvm_complete_ftl (struct nvm_io_cmd *);
 void nvm_callback (struct nvm_mmgr_io_cmd *);
-void nvm_complete_io (struct nvm_io_cmd *);
 int  nvm_dma (void *, uint64_t, ssize_t, uint8_t);
 int  nvm_memcheck (void *);
 int  nvm_ftl_cap_exec (uint8_t, void **, int);

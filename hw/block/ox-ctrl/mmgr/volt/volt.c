@@ -305,7 +305,7 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
 static void volt_execute_io (struct ox_mq_entry *req)
 {
     struct nvm_mmgr_io_cmd *cmd = (struct nvm_mmgr_io_cmd *) req->opaque;
-    int ret;
+    int ret, retry;
 
     ret = volt_process_io(cmd);
 
@@ -318,7 +318,14 @@ static void volt_execute_io (struct ox_mq_entry *req)
     cmd->status = NVM_IO_SUCCESS;
 
 COMPLETE:
-    ox_mq_complete_req(volt->mq, req);
+    retry = NVM_QUEUE_RETRY;
+    do {
+        ret = ox_mq_complete_req(volt->mq, req);
+        if (ret) {
+            retry--;
+            usleep (NVM_QUEUE_RETRY_SLEEP);
+        }
+    } while (ret && retry);
 }
 
 static int volt_enqueue_io (struct nvm_mmgr_io_cmd *io)
