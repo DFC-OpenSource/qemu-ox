@@ -24,6 +24,23 @@ void ox_mq_show_stats (struct ox_mq *mq)
     }
 }
 
+static void ox_mq_destroy_sq (struct ox_mq_queue *q)
+{
+    pthread_mutex_destroy (&q->sq_free_mutex);
+    pthread_mutex_destroy (&q->sq_used_mutex);
+    pthread_mutex_destroy (&q->sq_wait_mutex);
+    pthread_mutex_destroy (&q->sq_cond_m);
+    pthread_cond_destroy (&q->sq_cond);
+}
+
+static void ox_mq_destroy_cq (struct ox_mq_queue *q)
+{
+    pthread_mutex_destroy (&q->cq_free_mutex);
+    pthread_mutex_destroy (&q->cq_used_mutex);
+    pthread_mutex_destroy (&q->cq_cond_m);
+    pthread_cond_destroy (&q->cq_cond);
+}
+
 static int ox_mq_init_sq (struct ox_mq_queue *q, uint32_t size)
 {
     TAILQ_INIT (&q->sq_free);
@@ -32,6 +49,8 @@ static int ox_mq_init_sq (struct ox_mq_queue *q, uint32_t size)
     pthread_mutex_init (&q->sq_free_mutex, NULL);
     pthread_mutex_init (&q->sq_used_mutex, NULL);
     pthread_mutex_init (&q->sq_wait_mutex, NULL);
+    pthread_mutex_init (&q->sq_cond_m, NULL);
+    pthread_cond_init (&q->sq_cond, NULL);
 
     q->sq_entries = malloc (sizeof (struct ox_mq_entry) * size);
     if (!q->sq_entries)
@@ -42,9 +61,7 @@ static int ox_mq_init_sq (struct ox_mq_queue *q, uint32_t size)
     return 0;
 
 CLEAN:
-    pthread_mutex_destroy (&q->sq_free_mutex);
-    pthread_mutex_destroy (&q->sq_used_mutex);
-    pthread_mutex_destroy (&q->sq_wait_mutex);
+    ox_mq_destroy_sq (q);
     return -1;
 }
 
@@ -54,6 +71,8 @@ static int ox_mq_init_cq (struct ox_mq_queue *q, uint32_t size)
     TAILQ_INIT (&q->cq_used);
     pthread_mutex_init (&q->cq_free_mutex, NULL);
     pthread_mutex_init (&q->cq_used_mutex, NULL);
+    pthread_mutex_init (&q->cq_cond_m, NULL);
+    pthread_cond_init (&q->cq_cond, NULL);
 
     q->cq_entries = malloc (sizeof (struct ox_mq_entry) * size);
     if (!q->cq_entries)
@@ -64,8 +83,7 @@ static int ox_mq_init_cq (struct ox_mq_queue *q, uint32_t size)
     return 0;
 
 CLEAN:
-    pthread_mutex_destroy (&q->cq_free_mutex);
-    pthread_mutex_destroy (&q->cq_used_mutex);
+    ox_mq_destroy_cq (q);
     return -1;
 }
 
@@ -104,9 +122,7 @@ static int ox_mq_init_queue (struct ox_mq_queue *q, uint32_t size,
     return 0;
 
 CLEAN_SQ:
-    pthread_mutex_destroy (&q->sq_free_mutex);
-    pthread_mutex_destroy (&q->sq_used_mutex);
-    pthread_mutex_destroy (&q->sq_wait_mutex);
+    ox_mq_destroy_sq (q);
     free (q->sq_entries);
     return -1;
 }
@@ -119,15 +135,27 @@ static void ox_mq_free_queues (struct ox_mq *mq, uint32_t n_queues)
     for (i = 0; i < n_queues; i++) {
         q = &mq->queues[i];
         q->running = 0; /* stop threads */
-        pthread_mutex_destroy (&q->sq_free_mutex);
-        pthread_mutex_destroy (&q->sq_used_mutex);
-        pthread_mutex_destroy (&q->sq_wait_mutex);
+        ox_mq_destroy_sq (q);
         free (q->sq_entries);
-        pthread_mutex_destroy (&q->cq_free_mutex);
-        pthread_mutex_destroy (&q->cq_used_mutex);
+        ox_mq_destroy_cq (q);
         free (q->cq_entries);
     }
 }
+
+#define OX_MQ_ENQUEUE(head, elm, mutex, stat) do {                  \
+        pthread_mutex_lock((mutex));                                \
+        TAILQ_INSERT_TAIL((head), (elm), entry);                    \
+        pthread_mutex_unlock((mutex));                              \
+        u_atomic_inc((stat));                                       \
+} while (/*CONSTCOND*/0)
+
+#define OX_MQ_DEQUEUE(head, elm, mutex, stats) do {                 \
+        pthread_mutex_lock((mutex));                                \
+        req = TAILQ_FIRST((head));                                  \
+        TAILQ_REMOVE ((head), (elm), entry);                        \
+        pthread_mutex_unlock ((mutex));                             \
+        u_atomic_dec((stats));                                      \
+} while (/*CONSTCOND*/0)
 
 static void *ox_mq_sq_thread (void *arg)
 {
@@ -135,21 +163,15 @@ static void *ox_mq_sq_thread (void *arg)
     struct ox_mq_entry *req;
 
     while (q->running) {
-        if (TAILQ_EMPTY (&q->sq_used)) {
-            usleep(100);
-            continue;
-        }
+        pthread_mutex_lock(&q->sq_cond_m);
 
-        pthread_mutex_lock (&q->sq_used_mutex);
-        req = TAILQ_FIRST (&q->sq_used);
-        TAILQ_REMOVE (&q->sq_used, req, entry);
-        pthread_mutex_unlock (&q->sq_used_mutex);
-        u_atomic_dec(&q->stats.sq_used);
+        if (TAILQ_EMPTY (&q->sq_used))
+            pthread_cond_wait(&q->sq_cond, &q->sq_cond_m);
 
-        pthread_mutex_lock (&q->sq_wait_mutex);
-        TAILQ_INSERT_TAIL (&q->sq_wait, req, entry);
-        pthread_mutex_unlock (&q->sq_wait_mutex);
-        u_atomic_inc(&q->stats.sq_wait);
+        pthread_mutex_unlock(&q->sq_cond_m);
+
+        OX_MQ_DEQUEUE (&q->sq_used, req, &q->sq_used_mutex, &q->stats.sq_used);
+        OX_MQ_ENQUEUE (&q->sq_wait, req, &q->sq_wait_mutex, &q->stats.sq_wait);
 
         q->sq_fn (req);
     }
@@ -164,24 +186,17 @@ static void *ox_mq_cq_thread (void *arg)
     void *opaque;
 
     while (q->running) {
-        if (TAILQ_EMPTY (&q->cq_used)) {
-            usleep(100);
-            continue;
-        }
+        pthread_mutex_lock(&q->cq_cond_m);
 
-        pthread_mutex_lock (&q->cq_used_mutex);
-        req = TAILQ_FIRST (&q->cq_used);
-        TAILQ_REMOVE (&q->cq_used, req, entry);
-        pthread_mutex_unlock (&q->cq_used_mutex);
-        u_atomic_dec(&q->stats.cq_used);
+        if (TAILQ_EMPTY (&q->cq_used))
+            pthread_cond_wait(&q->cq_cond, &q->cq_cond_m);
 
+        pthread_mutex_unlock(&q->cq_cond_m);
+
+        OX_MQ_DEQUEUE (&q->cq_used, req, &q->cq_used_mutex, &q->stats.cq_used);
         opaque = req->opaque;
-
         memset (req, 0, sizeof (struct ox_mq_entry));
-        pthread_mutex_lock (&q->cq_free_mutex);
-        TAILQ_INSERT_TAIL (&q->cq_free, req, entry);
-        pthread_mutex_unlock (&q->cq_free_mutex);
-        u_atomic_inc(&q->stats.cq_free);
+        OX_MQ_ENQUEUE (&q->cq_free, req, &q->cq_free_mutex, &q->stats.cq_free);
 
         q->cq_fn (opaque);
     }
@@ -204,6 +219,7 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
 {
     struct ox_mq_queue *q;
     struct ox_mq_entry *req;
+    uint8_t wake = 0;
 
     if (qid >= mq->n_queues)
         return -1;
@@ -226,9 +242,18 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
     req->qid = qid;
 
     pthread_mutex_lock (&q->sq_used_mutex);
+    if (TAILQ_EMPTY (&q->sq_used))
+        wake++;
+
     TAILQ_INSERT_TAIL (&q->sq_used, req, entry);
-    pthread_mutex_unlock (&q->sq_used_mutex);
     u_atomic_inc(&q->stats.sq_used);
+
+    if (wake) {
+        pthread_mutex_lock (&q->sq_cond_m);
+        pthread_cond_signal(&q->sq_cond);
+        pthread_mutex_unlock (&q->sq_cond_m);
+    }
+    pthread_mutex_unlock (&q->sq_used_mutex);
 
     return 0;
 }
@@ -237,6 +262,7 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
 {
     struct ox_mq_queue *q;
     struct ox_mq_entry *req_cq;
+    uint8_t wake = 0;
 
     if (!req_sq || !req_sq->opaque)
         return -1;
@@ -265,15 +291,21 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     u_atomic_dec(&q->stats.sq_wait);
 
     memset (req_sq, 0, sizeof (struct ox_mq_entry));
-    pthread_mutex_lock (&q->sq_free_mutex);
-    TAILQ_INSERT_TAIL (&q->sq_free, req_sq, entry);
-    pthread_mutex_unlock (&q->sq_free_mutex);
-    u_atomic_inc(&q->stats.sq_free);
+    OX_MQ_ENQUEUE (&q->sq_free, req_sq, &q->sq_free_mutex, &q->stats.sq_free);
 
     pthread_mutex_lock (&q->cq_used_mutex);
+    if (TAILQ_EMPTY (&q->cq_used))
+        wake++;
+
     TAILQ_INSERT_TAIL (&q->cq_used, req_cq, entry);
-    pthread_mutex_unlock (&q->cq_used_mutex);
     u_atomic_inc(&q->stats.cq_used);
+
+    if (wake) {
+        pthread_mutex_lock (&q->cq_cond_m);
+        pthread_cond_signal(&q->cq_cond);
+        pthread_mutex_unlock (&q->cq_cond_m);
+    }
+    pthread_mutex_unlock (&q->cq_used_mutex);
 
     return 0;
 }

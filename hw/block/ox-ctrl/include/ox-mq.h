@@ -39,6 +39,10 @@ struct ox_mq_queue {
     TAILQ_HEAD (cq_used_head, ox_mq_entry) cq_used;
     ox_mq_sq_fn                            *sq_fn;
     ox_mq_cq_fn                            *cq_fn;
+    pthread_mutex_t                        sq_cond_m;
+    pthread_mutex_t                        cq_cond_m;
+    pthread_cond_t                         sq_cond;
+    pthread_cond_t                         cq_cond;
     pthread_t                              sq_tid;
     pthread_t                              cq_tid;
     uint8_t                                running; /* if 0, kill threads */
