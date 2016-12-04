@@ -530,6 +530,22 @@ static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
     return 0;
 }
 
+static void volt_req_timeout (void *opaque)
+{
+    // reset NAND channel
+    return;
+}
+
+struct ox_mq_config volt_mq = {
+    .n_queues   = VOLT_CHIP_COUNT,
+    .q_size     = VOLT_QUEUE_SIZE,
+    .sq_fn      = volt_execute_io,
+    .cq_fn      = volt_callback,
+    .to_fn      = volt_req_timeout,
+    .to_usec    = 2000000,
+    .flags      = 0x0,
+};
+
 static int volt_init(void)
 {
     int pages_ok;
@@ -552,8 +568,7 @@ static int volt_init(void)
     res_l = volt_init_luns();
     res_c = volt_init_channels();
     ret = volt_init_dma_buf();
-    volt->mq = ox_mq_init(volt_mmgr.geometry->n_of_ch, VOLT_QUEUE_SIZE,
-                                               volt_execute_io, volt_callback);
+    volt->mq = ox_mq_init(&volt_mq);
 
     if (!pages_ok || !res_l || !res_c || ret || !volt->mq)
         goto MEM_CLEAN;

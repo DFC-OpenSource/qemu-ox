@@ -165,15 +165,33 @@ static void nvm_ftl_process_cq (void *opaque)
     nvm_complete_to_host (cmd);
 }
 
+static void nvm_ftl_process_to (void *opaque)
+{
+    // renew nvme request (remove from main queue and allocate new)
+    return;
+}
+
 int nvm_register_ftl (struct nvm_ftl *ftl)
 {
+    struct ox_mq_config *mq_config;
+    
     if (strlen(ftl->name) > MAX_NAME_SIZE)
         return EMAX_NAME_SIZE;
 
     ftl->active = 1;
+    
+    mq_config = malloc (sizeof (struct ox_mq_config));
+    if (!mq_config)
+        return EMEM;
 
-    ftl->mq = ox_mq_init(ftl->nq, NVM_FTL_QUEUE_SIZE, nvm_ftl_process_sq,
-                                                           nvm_ftl_process_cq);
+    mq_config->n_queues = ftl->nq;
+    mq_config->q_size = NVM_FTL_QUEUE_SIZE;
+    mq_config->sq_fn = nvm_ftl_process_sq;
+    mq_config->cq_fn = nvm_ftl_process_cq;
+    mq_config->to_fn = nvm_ftl_process_to;
+    mq_config->to_usec = NVM_FTL_QUEUE_TO;
+    mq_config->flags = OX_MQ_TO_COMPLETE;
+    ftl->mq = ox_mq_init(mq_config);
     if (!ftl->mq)
         return -1;
 
@@ -592,6 +610,7 @@ static void nvm_unregister_ftl (struct nvm_ftl *ftl)
     if (LIST_EMPTY(&ftl_head))
         return;
 
+    free (ftl->mq->config);
     ox_mq_destroy(ftl->mq);
     core.ftl_q_count -= ftl->nq;
 

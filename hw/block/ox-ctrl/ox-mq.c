@@ -13,7 +13,7 @@ void ox_mq_show_stats (struct ox_mq *mq)
     int i;
     struct ox_mq_queue *q;
 
-    for (i = 0; i < mq->n_queues; i++) {
+    for (i = 0; i < mq->config->n_queues; i++) {
         q = &mq->queues[i];
         log_info ("Q %d. SF: %d, SU: %d, SW: %d, CF: %d, CU: %d\n", i,
                 u_atomic_read(&q->stats.sq_free),
@@ -221,7 +221,7 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
     struct ox_mq_entry *req;
     uint8_t wake = 0;
 
-    if (qid >= mq->n_queues)
+    if (qid >= mq->config->n_queues)
         return -1;
 
     q = &mq->queues[qid];
@@ -310,28 +310,64 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     return 0;
 }
 
-struct ox_mq *ox_mq_init (uint32_t n_queues, uint32_t q_size,
-                                        ox_mq_sq_fn *sq_fn, ox_mq_cq_fn *cq_fn)
+static void *ox_mq_to_thread (void *arg)
+{
+    struct ox_mq *mq = (struct ox_mq *) arg;
+    int exit, i;
+    
+    do {
+        usleep (mq->config->to_usec);
+        // add btree library
+        // create btree timeout 
+        // create btree for ext_entries
+        
+        // verify all wait queues
+        // enqueue timeout entry to to_btree
+        // allocate new entry and enqueue pointer to ext_entries btree
+        // also enqueue new entry to sq_free list        
+        // complete request if flag is active
+        // call user to_fn
+        
+        // in the completion fn, check if to_btree contains the pointer,
+        // if yes, remove from to_btree and free if ext_entries contains the ptr
+        //   remove from ext_entries if freed
+        
+        // create status for timeout entries, timeout completion hits, btrees 
+        
+        // make volt + core timeout functions
+        
+        exit = mq->config->n_queues;
+        for (i = 0; i < mq->config->n_queues; i++) {
+            if (!mq->queues[i].running)
+                exit--;
+        }
+        if (!exit)
+            break;
+    } while (1);
+    
+    return NULL;
+}
+
+struct ox_mq *ox_mq_init (struct ox_mq_config *config)
 {
     int i;
 
-    if (q_size < 1 || q_size > 0x10000 || n_queues < 1 || n_queues > 0x10000)
+    if (config->q_size < 1 || config->q_size > 0x10000 ||
+                            config->n_queues < 1 || config->n_queues > 0x10000)
         return NULL;
 
     struct ox_mq *mq = malloc (sizeof (struct ox_mq));
     if (!mq)
         return NULL;
 
-    mq->queues = malloc (sizeof (struct ox_mq_queue) * n_queues);
+    mq->queues = malloc (sizeof (struct ox_mq_queue) * config->n_queues);
     if (!mq->queues)
         goto CLEAN_MQ;
-    memset (mq->queues, 0, sizeof (struct ox_mq_queue) * n_queues);
+    memset (mq->queues, 0, sizeof (struct ox_mq_queue) * config->n_queues);
 
-    mq->q_size = q_size;
-    mq->n_queues = n_queues;
-
-    for (i = 0; i < n_queues; i++) {
-        if (ox_mq_init_queue (&mq->queues[i], q_size, sq_fn, cq_fn)) {
+    for (i = 0; i < config->n_queues; i++) {
+        if (ox_mq_init_queue (&mq->queues[i], config->q_size, 
+                                               config->sq_fn, config->cq_fn)) {
             ox_mq_free_queues (mq, i);
             goto CLEAN_Q;
         }
@@ -341,12 +377,18 @@ struct ox_mq *ox_mq_init (uint32_t n_queues, uint32_t q_size,
             goto CLEAN_Q;
         }
     }
+    
+    if (pthread_create(&mq->to_tid, NULL, ox_mq_to_thread, mq))
+        goto CLEAN_ALL;
+    
+    mq->config = config;
 
-    log_info (" [ox-mq: Multi queue started (nq: %d, qs: %d)\n", n_queues,
-                                                                       q_size);
-
+    log_info (" [ox-mq: Multi queue started (nq: %d, qs: %d)\n", 
+                                             config->n_queues, config->q_size);
     return mq;
 
+CLEAN_ALL:
+    ox_mq_free_queues (mq, config->n_queues);
 CLEAN_Q:
     free (mq->queues);
 CLEAN_MQ:
@@ -355,8 +397,9 @@ CLEAN_MQ:
 }
 
 void ox_mq_destroy (struct ox_mq *mq)
-{
-    ox_mq_free_queues(mq, mq->n_queues);
+{    
+    ox_mq_free_queues(mq, mq->config->n_queues);
+    pthread_join (mq->to_tid, NULL);
     free (mq->queues);
     free (mq);
 }

@@ -3,6 +3,7 @@
 
 #include <sys/queue.h>
 #include <pthread.h>
+#include <time.h>
 #include <stdint.h>
 #include "uatomic.h"
 
@@ -10,7 +11,8 @@ struct ox_mq_entry {
     void                     *opaque;
     uint32_t                 qid;
     uint8_t                  status;
-    TAILQ_ENTRY(ox_mq_entry)  entry;
+    struct timeval           wtime; /* timestamp for timeout */
+    TAILQ_ENTRY(ox_mq_entry) entry;
 };
 
 struct ox_mq_stats {
@@ -23,6 +25,7 @@ struct ox_mq_stats {
 
 typedef void (ox_mq_sq_fn)(struct ox_mq_entry *);
 typedef void (ox_mq_cq_fn)(void *);
+typedef void (ox_mq_to_fn)(void *);
 
 struct ox_mq_queue {
     pthread_mutex_t                        sq_free_mutex;
@@ -49,13 +52,25 @@ struct ox_mq_queue {
     struct ox_mq_stats                     stats;
 };
 
-struct ox_mq {
+#define OX_MQ_TO_COMPLETE   (1 << 0) /* Complete request after timeout */
+
+struct ox_mq_config {
     uint32_t            n_queues;
     uint32_t            q_size;
-    struct ox_mq_queue  *queues;
+    ox_mq_sq_fn         *sq_fn; /* submission queue consumer */
+    ox_mq_cq_fn         *cq_fn; /* completion queue consumer */
+    ox_mq_cq_fn         *to_fn; /* timeout call */
+    uint64_t            to_usec; /* timeout in microseconds */
+    uint8_t             flags;
 };
 
-struct ox_mq *ox_mq_init (uint32_t, uint32_t, ox_mq_sq_fn *, ox_mq_cq_fn *);
+struct ox_mq {
+    struct ox_mq_queue  *queues;    
+    struct ox_mq_config *config;
+    pthread_t           to_tid; /* timeout thread */
+};
+
+struct ox_mq *ox_mq_init (struct ox_mq_config *);
 void          ox_mq_destroy (struct ox_mq *);
 int           ox_mq_submit_req (struct ox_mq *, uint32_t, void *);
 int           ox_mq_complete_req (struct ox_mq *, struct ox_mq_entry *);
