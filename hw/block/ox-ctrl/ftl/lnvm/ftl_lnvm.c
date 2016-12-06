@@ -74,10 +74,10 @@ static int lnvm_erase_blk (struct nvm_mmgr_io_cmd *cmd)
 static int lnvm_check_end_io (struct nvm_io_cmd *cmd)
 {
     if (cmd->status.pgs_p == cmd->status.total_pgs) {
-        
+
         pthread_mutex_lock(&endio_mutex);
         if ( lnvm_check_pgmap_complete(cmd->status.pg_map) ) { //IO not ended
-            
+
             cmd->status.ret_t++;
             if (cmd->status.ret_t <= FTL_LNVM_IO_RETRY) {
                 log_err ("[FTL WARNING: Cmd resubmitted due failed pages]\n");
@@ -88,24 +88,24 @@ static int lnvm_check_end_io (struct nvm_io_cmd *cmd)
                 cmd->status.nvme_status = NVME_DATA_TRAS_ERROR;
                 goto COMPLETE;
             }
-            
+
         } else {
             cmd->status.status = NVM_IO_SUCCESS;
             cmd->status.nvme_status = NVME_SUCCESS;
             goto COMPLETE;
-        }        
+        }
     }
     goto RETURN;
-    
+
 SUBMIT:
     pthread_mutex_unlock(&endio_mutex);
     lnvm_submit_io(cmd);
     goto RETURN;
-    
+
 COMPLETE:
     pthread_mutex_unlock(&endio_mutex);
     nvm_complete_ftl(cmd);
-    
+
 RETURN:
     return 0;
 }
@@ -120,7 +120,7 @@ static void lnvm_callback_io (struct nvm_mmgr_io_cmd *cmd)
         pthread_mutex_lock(&endio_mutex);
         cmd->nvm_io->status.pg_errors++;
     }
-    
+
     cmd->nvm_io->status.pgs_p++;
     pthread_mutex_unlock(&endio_mutex);
 
@@ -199,7 +199,7 @@ static int lnvm_check_io (struct nvm_io_cmd *cmd)
 
     if (cmd->cmdtype == MMGR_ERASE_BLK)
         return 0;
-    
+
     if (cmd->status.total_pgs * LNVM_SEC_PG > 64
                                                 || cmd->status.total_pgs == 0){
         cmd->status.status = NVM_IO_FAIL;
@@ -218,7 +218,7 @@ static int lnvm_submit_io (struct nvm_io_cmd *cmd)
     if (cmd->ppalist[0].g.pg > 64 && cmd->ppalist[0].g.pg < 68)
         return 0;
     */
-    
+
     int ret, i;
     ret = lnvm_check_io(cmd);
     if (ret) return ret;
