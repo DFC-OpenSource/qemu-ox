@@ -22,6 +22,7 @@
 LIST_HEAD(lnvm_ch, lnvm_channel) ch_head = LIST_HEAD_INITIALIZER(ch_head);
 
 static pthread_mutex_t endio_mutex;
+static int lnvm_submit_io (struct nvm_io_cmd *);
 
 static struct lnvm_channel *lnvm_get_ch_instance(uint16_t ch_id)
 {
@@ -52,17 +53,17 @@ static int lnvm_check_pgmap_complete (uint8_t *pgmap) {
 
 static int lnvm_pg_read (struct nvm_mmgr_io_cmd *cmd)
 {
-    return nvm_submit_mmgr_io(cmd);
+    return nvm_submit_mmgr(cmd);
 }
 
 static int lnvm_pg_write (struct nvm_mmgr_io_cmd *cmd)
 {
-    return nvm_submit_mmgr_io(cmd);
+    return nvm_submit_mmgr(cmd);
 }
 
 static int lnvm_erase_blk (struct nvm_mmgr_io_cmd *cmd)
 {
-    return nvm_submit_mmgr_io(cmd);
+    return nvm_submit_mmgr(cmd);
 }
 
 /* If all pages were processed, it checks for errors. If all succeed, finish
@@ -70,32 +71,45 @@ static int lnvm_erase_blk (struct nvm_mmgr_io_cmd *cmd)
  *
  * Calls to this fn come from submit_io or from end_pg_io
  */
-static void lnvm_check_end_io (struct nvm_io_cmd *cmd)
+static int lnvm_check_end_io (struct nvm_io_cmd *cmd)
 {
     if (cmd->status.pgs_p == cmd->status.total_pgs) {
+
         pthread_mutex_lock(&endio_mutex);
         if ( lnvm_check_pgmap_complete(cmd->status.pg_map) ) { //IO not ended
+
             cmd->status.ret_t++;
             if (cmd->status.ret_t <= FTL_LNVM_IO_RETRY) {
                 log_err ("[FTL WARNING: Cmd resubmitted due failed pages]\n");
-                nvm_submit_io(cmd);
+                goto SUBMIT;
             } else {
+                log_err ("endind for fail\n");
                 cmd->status.status = NVM_IO_FAIL;
                 cmd->status.nvme_status = NVME_DATA_TRAS_ERROR;
-                nvm_complete_io(cmd);
+                goto COMPLETE;
             }
+
         } else {
             cmd->status.status = NVM_IO_SUCCESS;
             cmd->status.nvme_status = NVME_SUCCESS;
-            nvm_complete_io(cmd);
+            goto COMPLETE;
         }
-        pthread_mutex_unlock(&endio_mutex);
     }
+    goto RETURN;
+
+SUBMIT:
+    pthread_mutex_unlock(&endio_mutex);
+    lnvm_submit_io(cmd);
+    goto RETURN;
+
+COMPLETE:
+    pthread_mutex_unlock(&endio_mutex);
+    nvm_complete_ftl(cmd);
+
+RETURN:
+    return 0;
 }
 
-/* TODO: For now, we assume all the pages will be back from MMGR,
- * we dont define a timeout to finish the IO.
- */
 static void lnvm_callback_io (struct nvm_mmgr_io_cmd *cmd)
 {
     if (cmd->status == NVM_IO_SUCCESS) {
@@ -106,6 +120,7 @@ static void lnvm_callback_io (struct nvm_mmgr_io_cmd *cmd)
         pthread_mutex_lock(&endio_mutex);
         cmd->nvm_io->status.pg_errors++;
     }
+
     cmd->nvm_io->status.pgs_p++;
     pthread_mutex_unlock(&endio_mutex);
 
@@ -182,8 +197,6 @@ static int lnvm_check_io (struct nvm_io_cmd *cmd)
 
     cmd->status.pgs_p = cmd->status.pgs_s;
 
-    // TODO: if erase, wait for the ongoing W/R to complete before erase blk;
-    // During erasing, block all r/w to the target block until erase completion
     if (cmd->cmdtype == MMGR_ERASE_BLK)
         return 0;
 
@@ -200,6 +213,12 @@ static int lnvm_check_io (struct nvm_io_cmd *cmd)
 
 static int lnvm_submit_io (struct nvm_io_cmd *cmd)
 {
+    /* DEBUG: Force timeout for testing */
+    /*
+    if (cmd->ppalist[0].g.pg > 64 && cmd->ppalist[0].g.pg < 68)
+        return 0;
+    */
+
     int ret, i;
     ret = lnvm_check_io(cmd);
     if (ret) return ret;
@@ -242,43 +261,43 @@ static int lnvm_init_channel (struct nvm_channel *ch)
     struct lnvm_channel *lch;
     uint32_t tblks;
     int rsv, l_addr, b_addr, pl_addr, trsv, n, pl, n_pl;
-    
+
     n_pl = ch->geometry->n_of_planes;
     ch->ftl_rsv = FTL_LNVM_RSV_BLK;
     trsv = ch->ftl_rsv * n_pl;
     ch->ftl_rsv_list = malloc (trsv * sizeof(struct nvm_ppa_addr));
-    
+
     if (!ch->ftl_rsv_list)
         return EMEM;
-    
+
     memset (ch->ftl_rsv_list, 0, trsv * sizeof(struct nvm_ppa_addr));
-    
+
     for (n = 0; n < ch->ftl_rsv; n++) {
         for (pl = 0; pl < n_pl; pl++) {
             ch->ftl_rsv_list[n_pl * n + pl].g.blk = n + ch->mmgr_rsv;
             ch->ftl_rsv_list[n_pl * n + pl].g.pl = pl;
         }
     }
-    
+
     lch = malloc (sizeof(struct lnvm_channel));
     if (!lch)
         return EMEM;
-    
+
     tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch * n_pl;
-    
+
     lch->ch = ch;
     lch->bbtbl = malloc (sizeof(uint8_t) * tblks);
     if (!lch->bbtbl)
         return EMEM;
-    
+
     memset (lch->bbtbl, 0, tblks);
-    
-    /* TODO: Verify if bbtbl exists in non-volatile storage             
+
+    /* TODO: Verify if bbtbl exists in non-volatile storage
              if not, create it and flush to nvm
              get bbtbl from non-volatile storage
-             flush bbtbl to nvm when get a set_bb_tbl with ppa sector > 0 
+             flush bbtbl to nvm when get a set_bb_tbl with ppa sector > 0
              move the loopings below to a bbtbl create fn */
-    
+
     /* Set FTL reserved bad blocks */
     for (rsv = 0; rsv < ch->ftl_rsv * n_pl; rsv++){
         l_addr = ch->ftl_rsv_list[rsv].g.lun * ch->geometry->blk_per_lun * n_pl;
@@ -320,18 +339,18 @@ static int lnvm_ftl_get_bbtbl (struct nvm_ppa_addr *ppa, uint8_t *bbtbl,
 
 static int lnvm_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
 {
-    int l_addr, n_pl;    
+    int l_addr, n_pl;
     struct lnvm_channel *lch = lnvm_get_ch_instance(ppa->g.ch);
-    
+
     n_pl = lch->ch->geometry->n_of_planes;
-    
-    if ((ppa->g.blk * n_pl + ppa->g.pl) > 
+
+    if ((ppa->g.blk * n_pl + ppa->g.pl) >
                                    (lch->ch->geometry->blk_per_lun * n_pl - 1))
         return -1;
-    
-    l_addr = ppa->g.lun * lch->ch->geometry->blk_per_lun * n_pl;    
+
+    l_addr = ppa->g.lun * lch->ch->geometry->blk_per_lun * n_pl;
     lch->bbtbl[l_addr + (ppa->g.blk * n_pl + ppa->g.pl)] = value;
-    
+
     return 0;
 }
 
@@ -346,7 +365,7 @@ static void lnvm_exit (struct nvm_ftl *ftl)
         LIST_REMOVE (lch, entry);
         free (lch);
     } while (!LIST_EMPTY(&ch_head));
-    
+
     pthread_mutex_destroy (&endio_mutex);
 }
 

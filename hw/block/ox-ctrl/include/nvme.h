@@ -852,10 +852,12 @@ typedef struct NvmeNamespace {
 } NvmeNamespace;
 
 typedef struct NvmeRequest {
+    uint8_t                  ext; /* allocated later due timeout request */
     TAILQ_ENTRY(NvmeRequest) entry;
+    LIST_ENTRY(NvmeRequest)  ext_req;
     struct NvmeSQ            *sq;
     struct NvmeNamespace     *ns;
-    struct NvmeCmd           *cmd;
+    struct NvmeCmd           cmd;
     NvmeCqe                  cqe;
     uint16_t                 status;
     uint64_t                 slba;
@@ -1056,6 +1058,7 @@ typedef struct NvmeCtrl {
     pthread_spinlock_t                          qs_req_spin;
     pthread_spinlock_t                          aer_req_spin;
     pthread_mutex_t                             req_mutex;
+    LIST_HEAD(ext_list, NvmeRequest)            ext_list;/*req allocated later*/
 
 #if LIGHTNVM
     LnvmCtrl     lightnvm_ctrl;
@@ -1065,7 +1068,7 @@ typedef struct NvmeCtrl {
 void nvme_exit(void);
 uint8_t nvme_write_to_host(void *, uint64_t, ssize_t);
 uint8_t nvme_read_from_host(void *, uint64_t, ssize_t);
-uint16_t nvme_init_cq (NvmeCQ *, NvmeCtrl *, uint64_t, uint16_t, uint16_t, 
+uint16_t nvme_init_cq (NvmeCQ *, NvmeCtrl *, uint64_t, uint16_t, uint16_t,
         uint16_t, uint16_t, int);
 uint16_t nvme_init_sq (NvmeSQ *, NvmeCtrl *, uint64_t, uint16_t, uint16_t,
         uint16_t, enum NvmeQFlags, int);

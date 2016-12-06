@@ -188,6 +188,8 @@ static int nvme_init_ctrl (NvmeCtrl *n)
     if (!n->elpes || !n->aer_reqs)
         return EMEM;
 
+    LIST_INIT (&n->ext_list);
+
     memset(&n->stat, 0, sizeof(NvmeStats));
 
     return 0;
@@ -480,6 +482,7 @@ void nvme_free_cq (NvmeCQ *cq, NvmeCtrl *n)
 static void nvme_clear_ctrl (NvmeCtrl *n)
 {
     NvmeAsyncEvent *event;
+    NvmeRequest *req;
     int i;
 
     if (!n->running) {
@@ -501,6 +504,15 @@ static void nvme_clear_ctrl (NvmeCtrl *n)
 		nvme_free_cq (n->cq[i], n);
             }
 	}
+    }
+
+    /* Free requests allocated later */
+    while (!LIST_EMPTY(&n->ext_list)) {
+        req = LIST_FIRST (&n->ext_list);
+        if (req) {
+            LIST_REMOVE (req, ext_req);
+            free (req);
+        }
     }
 
     pthread_spin_lock(&n->aer_req_spin);
@@ -695,6 +707,7 @@ static void nvme_post_cqe (NvmeCQ *cq, NvmeRequest *req)
     NvmeCtrl *n = cq->ctrl;
     NvmeSQ *sq = req->sq;
     NvmeCqe *cqe = &req->cqe;
+    NvmeRequest *new_req;
     uint8_t phase = cq->phase;
     uint64_t addr;
 
@@ -724,6 +737,16 @@ static void nvme_post_cqe (NvmeCQ *cq, NvmeRequest *req)
     nvme_addr_write (n, addr, (void *)cqe, sizeof (*cqe));
 
     nvme_inc_cq_tail (cq);
+
+    /* Failed requests are not used in the queue
+     * In case of timeout request, we have to avoid reusing the same structure
+     * TODO: Free these structures when the timeout request hits completion */
+    if (req->status != NVME_SUCCESS) {
+        new_req = malloc (sizeof (NvmeRequest));
+        memcpy (new_req, req, sizeof (NvmeRequest));
+        new_req->ext = 1;
+        req = new_req;
+    }
 
     TAILQ_INSERT_TAIL (&sq->req_list, req, entry);
     if (cq->hold_sqs) cq->hold_sqs = 0;
@@ -812,7 +835,6 @@ uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         printf("\n[%lu] ADMIN CMD 0x%x, nsid: %d, cid: %d\n",
                    n->stat.tot_num_AdminCmd, cmd->opcode, cmd->nsid, cmd->cid);
 
-    req->cmd = cmd;
     switch (cmd->opcode) {
     	case NVME_ADM_CMD_DELETE_SQ:
             return nvme_del_sq (n, cmd);
@@ -877,7 +899,6 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         printf("\n[%lu] IO CMD 0x%x, nsid: %d, cid: %d\n",
                    n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);
 
-    req->cmd = cmd;
     switch (cmd->opcode) {
 #if LIGHTNVM
         case LNVM_CMD_PHYS_READ:
@@ -991,7 +1012,7 @@ static void nvme_process_sq (void *opaque)
 
         if (addr == 0) continue;
 
-        nvme_addr_read (n, addr, (void *)&cmd, sizeof (cmd));
+        nvme_addr_read (n, addr, (void *)&cmd, sizeof (NvmeCmd));
 	nvme_inc_sq_head (sq);
 
         if (cmd.opcode == NVME_OP_ABORTED) {
@@ -1007,20 +1028,24 @@ static void nvme_process_sq (void *opaque)
 	memset (&req->cqe, 0, sizeof (req->cqe));
 	req->cqe.cid = cmd.cid;
 
+        memcpy (&req->cmd, &cmd, sizeof(NvmeCmd));
+
 	status = sq->sqid ?
             nvme_io_cmd (n, &cmd, req) : nvme_admin_cmd (n, &cmd, req);
 
         /* JUMP */
- /*       if (sq->sqid) {
+        /*
+        if (sq->sqid) {
             req->status = NVME_SUCCESS;
             nvme_enqueue_req_completion (cq, req);
             goto JUMP;
-        }*/
+        }
+        */
         /* JUMP */
 
         if (status != NVME_NO_COMPLETE && status != NVME_SUCCESS) {
             sprintf(err, " [ERROR nvme: cmd 0x%x, with cid: %d returned an "
-                           "error status: %x\n", cmd.opcode, cmd.cid, status);
+                          "error status: %x\n", cmd.opcode, cmd.cid, status);
             log_err ("%s",err);
             if (core.debug) printf("%s",err);
         }
