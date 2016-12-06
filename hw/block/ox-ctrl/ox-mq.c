@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/queue.h>
@@ -22,6 +23,22 @@ void ox_mq_show_stats (struct ox_mq *mq)
                 u_atomic_read(&q->stats.cq_free),
                 u_atomic_read(&q->stats.cq_used));
     }
+    log_info ("EXT %d, TO: %d, TO_BACK: %d\n",
+                u_atomic_read(&mq->stats.ext_list),
+                u_atomic_read(&mq->stats.timeout),
+                u_atomic_read(&mq->stats.to_back));
+}
+
+static void ox_mq_init_stats (struct ox_mq_stats *stats)
+{
+    stats->cq_free.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->cq_used.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->sq_free.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->sq_used.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->sq_wait.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->ext_list.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->timeout.counter = U_ATOMIC_INIT_RUNTIME(0);
+    stats->to_back.counter = U_ATOMIC_INIT_RUNTIME(0);
 }
 
 static void ox_mq_destroy_sq (struct ox_mq_queue *q)
@@ -104,17 +121,15 @@ static int ox_mq_init_queue (struct ox_mq_queue *q, uint32_t size,
     if (ox_mq_init_cq (q, size))
         goto CLEAN_SQ;
 
-    q->stats.cq_free.counter = U_ATOMIC_INIT_RUNTIME(0);
-    q->stats.cq_used.counter = U_ATOMIC_INIT_RUNTIME(0);
-    q->stats.sq_free.counter = U_ATOMIC_INIT_RUNTIME(0);
-    q->stats.sq_used.counter = U_ATOMIC_INIT_RUNTIME(0);
-    q->stats.sq_wait.counter = U_ATOMIC_INIT_RUNTIME(0);
+    ox_mq_init_stats(&q->stats);
 
     for (i = 0; i < size; i++) {
         TAILQ_INSERT_TAIL (&q->sq_free, &q->sq_entries[i], entry);
         u_atomic_inc(&q->stats.sq_free);
         TAILQ_INSERT_TAIL (&q->cq_free, &q->cq_entries[i], entry);
         u_atomic_inc(&q->stats.cq_free);
+        pthread_mutex_init (&q->sq_entries[i].entry_mutex, NULL);
+        pthread_mutex_init (&q->cq_entries[i].entry_mutex, NULL);
     }
 
     q->running = 1; /* ready */
@@ -127,14 +142,54 @@ CLEAN_SQ:
     return -1;
 }
 
+inline static void ox_mq_reset_entry (struct ox_mq_entry *entry)
+{
+    entry->status = OX_MQ_FREE;
+    entry->opaque = NULL;
+    entry->qid = 0;
+    memset (&entry->wtime, 0, sizeof (struct timeval));
+}
+
+static struct ox_mq_entry *ox_mq_create_ext_entry (struct ox_mq *mq)
+{
+    struct ox_mq_entry *new_entry;
+
+    new_entry = malloc (sizeof (struct ox_mq_entry));
+    if (!new_entry)
+        return NULL;
+
+    new_entry->is_ext = 0x1;
+    pthread_mutex_init (&new_entry->entry_mutex, NULL);
+    ox_mq_reset_entry (new_entry);
+
+    LIST_INSERT_HEAD (&mq->ext_list, new_entry, ext_entry);
+    u_atomic_inc (&mq->stats.ext_list);
+
+    return new_entry;
+}
+
+static void ox_mq_free_entry (struct ox_mq *mq, struct ox_mq_entry *entry)
+{
+    if (entry->is_ext) {
+        LIST_REMOVE (entry, ext_entry);
+        pthread_mutex_destroy (&entry->entry_mutex);
+        free (entry);
+        u_atomic_dec (&mq->stats.ext_list);
+    }
+}
+
 static void ox_mq_free_queues (struct ox_mq *mq, uint32_t n_queues)
 {
-    int i;
+    int i, j;
     struct ox_mq_queue *q;
 
     for (i = 0; i < n_queues; i++) {
         q = &mq->queues[i];
         q->running = 0; /* stop threads */
+        for (j = 0; j < mq->config->q_size; j++) {
+            pthread_mutex_destroy (&q->sq_entries[j].entry_mutex);
+            pthread_mutex_destroy (&q->cq_entries[j].entry_mutex);
+        }
         ox_mq_destroy_sq (q);
         free (q->sq_entries);
         ox_mq_destroy_cq (q);
@@ -149,9 +204,16 @@ static void ox_mq_free_queues (struct ox_mq *mq, uint32_t n_queues)
         u_atomic_inc((stat));                                       \
 } while (/*CONSTCOND*/0)
 
+#define OX_MQ_DEQUEUE_H(head, elm, mutex, stats) do {               \
+        pthread_mutex_lock((mutex));                                \
+        (elm) = TAILQ_FIRST((head));                                \
+        TAILQ_REMOVE ((head), (elm), entry);                        \
+        pthread_mutex_unlock ((mutex));                             \
+        u_atomic_dec((stats));                                      \
+} while (/*CONSTCOND*/0)
+
 #define OX_MQ_DEQUEUE(head, elm, mutex, stats) do {                 \
         pthread_mutex_lock((mutex));                                \
-        req = TAILQ_FIRST((head));                                  \
         TAILQ_REMOVE ((head), (elm), entry);                        \
         pthread_mutex_unlock ((mutex));                             \
         u_atomic_dec((stats));                                      \
@@ -170,7 +232,11 @@ static void *ox_mq_sq_thread (void *arg)
 
         pthread_mutex_unlock(&q->sq_cond_m);
 
-        OX_MQ_DEQUEUE (&q->sq_used, req, &q->sq_used_mutex, &q->stats.sq_used);
+        OX_MQ_DEQUEUE_H(&q->sq_used, req, &q->sq_used_mutex, &q->stats.sq_used);
+
+        gettimeofday(&req->wtime, NULL);
+
+        req->status = OX_MQ_WAITING;
         OX_MQ_ENQUEUE (&q->sq_wait, req, &q->sq_wait_mutex, &q->stats.sq_wait);
 
         q->sq_fn (req);
@@ -193,9 +259,9 @@ static void *ox_mq_cq_thread (void *arg)
 
         pthread_mutex_unlock(&q->cq_cond_m);
 
-        OX_MQ_DEQUEUE (&q->cq_used, req, &q->cq_used_mutex, &q->stats.cq_used);
+        OX_MQ_DEQUEUE_H(&q->cq_used, req, &q->cq_used_mutex, &q->stats.cq_used);
         opaque = req->opaque;
-        memset (req, 0, sizeof (struct ox_mq_entry));
+        ox_mq_reset_entry (req);
         OX_MQ_ENQUEUE (&q->cq_free, req, &q->cq_free_mutex, &q->stats.cq_free);
 
         q->cq_fn (opaque);
@@ -226,7 +292,7 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
 
     q = &mq->queues[qid];
 
-    /* TODO: retry user defined times if queue is full */
+    /* If queue is full, the request is rejected */
     pthread_mutex_lock (&q->sq_free_mutex);
     if (TAILQ_EMPTY (&q->sq_free)) {
         pthread_mutex_unlock (&q->sq_free_mutex);
@@ -245,9 +311,11 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
     if (TAILQ_EMPTY (&q->sq_used))
         wake++;
 
+    req->status = OX_MQ_QUEUED;
     TAILQ_INSERT_TAIL (&q->sq_used, req, entry);
     u_atomic_inc(&q->stats.sq_used);
 
+    /* Wake consumer thread if queue was empty */
     if (wake) {
         pthread_mutex_lock (&q->sq_cond_m);
         pthread_cond_signal(&q->sq_cond);
@@ -264,10 +332,24 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     struct ox_mq_entry *req_cq;
     uint8_t wake = 0;
 
-    if (!req_sq || !req_sq->opaque)
+    pthread_mutex_lock (&req_sq->entry_mutex);
+    /* Timeout requests are OX_MQ_TIMEOUT_BACK after the first completion try */
+    if (!req_sq || !req_sq->opaque || req_sq->status == OX_MQ_TIMEOUT_BACK) {
+        pthread_mutex_unlock (&req_sq->entry_mutex);
         return -1;
+    }
+
+    /* Check if request is a TIMEOUT_COMPLETED but not TIMEOUT_BACK */
+    if (req_sq->status == OX_MQ_TIMEOUT_COMPLETED) {
+        ox_mq_free_entry(mq, req_sq);
+        u_atomic_inc(&mq->stats.to_back);
+        pthread_mutex_unlock (&req_sq->entry_mutex);
+        req_sq->status = OX_MQ_TIMEOUT_BACK;
+        return -1;
+    }
 
     q = &mq->queues[req_sq->qid];
+    pthread_mutex_unlock (&req_sq->entry_mutex);
 
     /* TODO: retry user defined times if queue is full */
     pthread_mutex_lock (&q->cq_free_mutex);
@@ -282,24 +364,27 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     pthread_mutex_unlock (&q->cq_free_mutex);
     u_atomic_dec(&q->stats.cq_free);
 
+    pthread_mutex_lock (&req_sq->entry_mutex);
     req_cq->opaque = req_sq->opaque;
     req_cq->qid = req_sq->qid;
 
-    pthread_mutex_lock (&q->sq_wait_mutex);
-    TAILQ_REMOVE (&q->sq_wait, req_sq, entry);
-    pthread_mutex_unlock (&q->sq_wait_mutex);
-    u_atomic_dec(&q->stats.sq_wait);
+    if (req_sq->status == OX_MQ_WAITING) {
+        OX_MQ_DEQUEUE (&q->sq_wait,req_sq,&q->sq_wait_mutex,&q->stats.sq_wait);
 
-    memset (req_sq, 0, sizeof (struct ox_mq_entry));
-    OX_MQ_ENQUEUE (&q->sq_free, req_sq, &q->sq_free_mutex, &q->stats.sq_free);
+        ox_mq_reset_entry (req_sq);
+        OX_MQ_ENQUEUE (&q->sq_free,req_sq,&q->sq_free_mutex,&q->stats.sq_free);
+    }
+    pthread_mutex_unlock (&req_sq->entry_mutex); /**/
 
     pthread_mutex_lock (&q->cq_used_mutex);
     if (TAILQ_EMPTY (&q->cq_used))
         wake++;
 
+    req_cq->status = OX_MQ_QUEUED;
     TAILQ_INSERT_TAIL (&q->cq_used, req_cq, entry);
     u_atomic_inc(&q->stats.cq_used);
 
+    /* Wake consumer thread if queue was empty */
     if (wake) {
         pthread_mutex_lock (&q->cq_cond_m);
         pthread_cond_signal(&q->cq_cond);
@@ -310,32 +395,134 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     return 0;
 }
 
+static int ox_mq_check_entry_to (struct ox_mq *mq, struct ox_mq_entry *entry)
+{
+    struct timeval cur;
+    uint64_t usec_e, usec_s, tot;
+
+    gettimeofday(&cur, NULL);
+
+    usec_e = cur.tv_sec * SEC64;
+    usec_e += cur.tv_usec;
+    usec_s = entry->wtime.tv_sec * SEC64;
+    usec_s += entry->wtime.tv_usec;
+
+    tot = usec_e - usec_s;
+
+    return (tot >= mq->config->to_usec);
+}
+
+static int ox_mq_process_to_entry (struct ox_mq *mq, struct ox_mq_queue *q,
+                                                      struct ox_mq_entry *req) {
+    struct ox_mq_entry *new_req;
+
+    TAILQ_REMOVE (&q->sq_wait, req, entry);
+    u_atomic_dec(&q->stats.sq_wait);
+
+    req->status = OX_MQ_TIMEOUT;
+
+    new_req = ox_mq_create_ext_entry(mq);
+    if (!new_req)
+        goto ERR;
+
+    OX_MQ_ENQUEUE(&q->sq_free, new_req, &q->sq_free_mutex, &q->stats.sq_free);
+
+    return 0;
+
+ERR:
+    log_err (" [ox-mq: WARNING: timeout entry is out of list, not possible "
+                        "to allocate new entry. Queue size is now smaller.\n");
+    return -1;
+}
+
+static void ox_mq_check_queue_to (struct ox_mq *mq, struct ox_mq_queue *q)
+{
+    struct ox_mq_entry *req;
+    struct ox_mq_entry **to_list;
+    void **to_opaque;
+    int to_count, i;
+
+    to_count = 0;
+    to_list = NULL;
+    pthread_mutex_lock (&q->sq_wait_mutex);
+
+    /* Check and process the list of timeout requests */
+    TAILQ_FOREACH (req, &q->sq_wait, entry) {
+        if (ox_mq_check_entry_to(mq, req)) {
+
+            ox_mq_process_to_entry (mq, q, req);
+            if (to_count)
+                to_list = realloc (to_list, sizeof (void *) * to_count + 1);
+            else
+                to_list = malloc (sizeof (void *));
+
+            to_list[to_count] = req;
+            u_atomic_inc(&mq->stats.timeout);
+            to_count++;
+
+        }
+    }
+
+    pthread_mutex_unlock (&q->sq_wait_mutex);
+
+    if (to_count)
+        to_opaque = malloc (sizeof (void *) * to_count);
+
+    for (i = 0; i < to_count; i++)
+        to_opaque[i] = to_list[i]->opaque;
+
+    /* Call user defined timeout function */
+    if (to_count)
+        mq->config->to_fn (to_opaque, to_count);
+
+    /* Complete the list of timeout requests, if flag enabled */
+    i = to_count;
+    while (i) {
+        i--;
+        if (mq->config->to_fn && (mq->config->flags & OX_MQ_TO_COMPLETE))
+            if (ox_mq_complete_req(mq, to_list[i]))
+                log_err (" [ox-mq: WARNING: Not possible to post completion "
+                                                      "for a timeout request");
+        to_list[i]->status = OX_MQ_TIMEOUT_COMPLETED;
+    }
+
+    if (to_count) {
+        free (to_opaque);
+        free (to_list);
+    }
+}
+
+/*
+ * This thread checks all sq_wait queues for timeout requests.
+ *
+ * If a timeout entry id found, the follow steps are performed:
+ *  - Remove the entry from sq_wait;
+ *  - Set timeout entry status to OX_MQ_TIMEOUT;
+ *  - Allocate a new entry;
+ *  - Insert the new entry to the sq_free;
+ *  - Insert the new entry to mq->ext_entries for exit free process;
+ *
+ * After all entries are processed:
+ *  - Call the user defined timeout function and pass the list of TO entries;
+ *    - In this function, the user should set the opaque structures as failed
+ *  - If the flag is enabled, submit all the entries for completion;
+ *  - Set timeout entries status to OX_MQ_TIMEOUT_COMPLETED;
+ *
+ * If the entry is called for completion later:
+ *  - Check is the entry is part of the ext_entries, if yes, free memory;
+ *    - Set the entry as OX_MQ_TIMEOUT_BACK (to avoid double free)
+ */
 static void *ox_mq_to_thread (void *arg)
 {
     struct ox_mq *mq = (struct ox_mq *) arg;
     int exit, i;
-    
+
     do {
         usleep (mq->config->to_usec);
-        // add btree library
-        // create btree timeout 
-        // create btree for ext_entries
-        
-        // verify all wait queues
-        // enqueue timeout entry to to_btree
-        // allocate new entry and enqueue pointer to ext_entries btree
-        // also enqueue new entry to sq_free list        
-        // complete request if flag is active
-        // call user to_fn
-        
-        // in the completion fn, check if to_btree contains the pointer,
-        // if yes, remove from to_btree and free if ext_entries contains the ptr
-        //   remove from ext_entries if freed
-        
-        // create status for timeout entries, timeout completion hits, btrees 
-        
-        // make volt + core timeout functions
-        
+
+        for (i = 0; i < mq->config->n_queues; i++)
+            ox_mq_check_queue_to(mq, &mq->queues[i]);
+
         exit = mq->config->n_queues;
         for (i = 0; i < mq->config->n_queues; i++) {
             if (!mq->queues[i].running)
@@ -344,8 +531,18 @@ static void *ox_mq_to_thread (void *arg)
         if (!exit)
             break;
     } while (1);
-    
+
     return NULL;
+}
+
+static int ox_mq_start_to (struct ox_mq *mq)
+{
+    LIST_INIT (&mq->ext_list);
+
+    if (pthread_create(&mq->to_tid, NULL, ox_mq_to_thread, mq))
+        return -1;
+
+    return 0;
 }
 
 struct ox_mq *ox_mq_init (struct ox_mq_config *config)
@@ -362,44 +559,58 @@ struct ox_mq *ox_mq_init (struct ox_mq_config *config)
 
     mq->queues = malloc (sizeof (struct ox_mq_queue) * config->n_queues);
     if (!mq->queues)
-        goto CLEAN_MQ;
+        goto FREE_MQ;
     memset (mq->queues, 0, sizeof (struct ox_mq_queue) * config->n_queues);
 
+    ox_mq_init_stats(&mq->stats);
+
     for (i = 0; i < config->n_queues; i++) {
-        if (ox_mq_init_queue (&mq->queues[i], config->q_size, 
+        if (ox_mq_init_queue (&mq->queues[i], config->q_size,
                                                config->sq_fn, config->cq_fn)) {
             ox_mq_free_queues (mq, i);
-            goto CLEAN_Q;
+            goto FREE_Q;
         }
 
         if (ox_mq_start_thread (&mq->queues[i])) {
             ox_mq_free_queues (mq, i + 1);
-            goto CLEAN_Q;
+            goto FREE_Q;
         }
     }
-    
-    if (pthread_create(&mq->to_tid, NULL, ox_mq_to_thread, mq))
-        goto CLEAN_ALL;
-    
+
     mq->config = config;
 
-    log_info (" [ox-mq: Multi queue started (nq: %d, qs: %d)\n", 
+    if (mq->config->to_usec && ox_mq_start_to(mq))
+        goto FREE_ALL;
+
+    log_info (" [ox-mq: Multi queue started (nq: %d, qs: %d)\n",
                                              config->n_queues, config->q_size);
     return mq;
 
-CLEAN_ALL:
+FREE_ALL:
     ox_mq_free_queues (mq, config->n_queues);
-CLEAN_Q:
+FREE_Q:
     free (mq->queues);
-CLEAN_MQ:
+FREE_MQ:
     free (mq);
     return NULL;
 }
 
+static void ox_mq_free_ext_list (struct ox_mq *mq)
+{
+    struct ox_mq_entry *entry;
+
+    while (!LIST_EMPTY(&mq->ext_list)) {
+        entry = LIST_FIRST (&mq->ext_list);
+        if (entry)
+            ox_mq_free_entry(mq, entry);
+    }
+}
+
 void ox_mq_destroy (struct ox_mq *mq)
-{    
+{
     ox_mq_free_queues(mq, mq->config->n_queues);
     pthread_join (mq->to_tid, NULL);
+    ox_mq_free_ext_list (mq);
     free (mq->queues);
     free (mq);
 }
