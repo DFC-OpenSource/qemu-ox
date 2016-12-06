@@ -44,7 +44,7 @@
 #define NVM_QUEUE_RETRY         16
 #define NVM_QUEUE_RETRY_SLEEP   500
 #define NVM_FTL_QUEUE_SIZE      64
-#define NVM_FTL_QUEUE_TO        2000000
+#define NVM_FTL_QUEUE_TO        100000
 
 #define NVM_SYNCIO_TO          10
 #define NVM_SYNCIO_FLAG_BUF    0x1
@@ -58,6 +58,7 @@
 
 #define AND64                  0xffffffffffffffff
 #define ZERO_32FLAG            0x00000000
+#define SEC64                  (1000000 & AND64)
 
 #define NVM_CH_IN_USE          0x3c
 

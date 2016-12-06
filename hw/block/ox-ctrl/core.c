@@ -122,7 +122,7 @@ static void nvm_complete_to_host (struct nvm_io_cmd *cmd)
 
     if (core.debug)
         printf(" [NVMe cmd 0x%x. cid: %d completed. Status: %x]\n",
-                                 req->cmd->opcode, req->cmd->cid, req->status);
+                                   req->cmd.opcode, req->cmd.cid, req->status);
 
     ((core.run_flag & RUN_TESTS) && core.tests_init->complete_io) ?
         core.tests_init->complete_io(req) : nvme_rw_cb(req);
@@ -165,21 +165,28 @@ static void nvm_ftl_process_cq (void *opaque)
     nvm_complete_to_host (cmd);
 }
 
-static void nvm_ftl_process_to (void *opaque)
+static void nvm_ftl_process_to (void **opaque, int counter)
 {
-    // renew nvme request (remove from main queue and allocate new)
-    return;
+    struct nvm_io_cmd *cmd;
+
+    while (counter) {
+        counter--;
+        cmd = (struct nvm_io_cmd *) opaque[counter];
+        cmd->status.status = NVM_IO_FAIL;
+        cmd->status.nvme_status = NVME_DATA_TRAS_ERROR;
+    }
 }
 
 int nvm_register_ftl (struct nvm_ftl *ftl)
 {
     struct ox_mq_config *mq_config;
-    
+
     if (strlen(ftl->name) > MAX_NAME_SIZE)
         return EMAX_NAME_SIZE;
 
     ftl->active = 1;
-    
+
+    /* Start FTL multi-queue */
     mq_config = malloc (sizeof (struct ox_mq_config));
     if (!mq_config)
         return EMEM;
