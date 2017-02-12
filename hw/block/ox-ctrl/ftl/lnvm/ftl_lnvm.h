@@ -13,10 +13,15 @@
 #define FTL_LNVM_H
 
 #include <sys/queue.h>
-#include "../../include/ssd.h"
+#include "hw/block/ox-ctrl/include/ssd.h"
 
 #define FTL_LNVM_IO_RETRY     0
 #define FTL_LNVM_RSV_BLK      1
+
+enum {
+    FTL_PGMAP_OFF   = 0,
+    FTL_PGMAP_ON    = 1
+};
 
 struct lnvm_page {
 
