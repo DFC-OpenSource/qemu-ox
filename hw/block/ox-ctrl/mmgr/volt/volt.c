@@ -171,7 +171,8 @@ static void volt_clean_mem(void)
 {
     struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
 
-    int total_blk = geo->blk_per_lun * geo->lun_per_ch;
+    int total_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
 
     int i;
     for (i = 0; i < total_blk; i++) {
