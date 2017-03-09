@@ -36,7 +36,7 @@ static void volt_set_prp_map(uint64_t index, uint8_t flag)
     pthread_mutex_unlock(&prpmap_mutex);
 }
 
-static uint8_t volt_get_next_prp(struct volt_dma *dma){
+static uint32_t volt_get_next_prp(struct volt_dma *dma){
     uint64_t next = 0;
 
     do {
@@ -73,67 +73,164 @@ static VoltBlock *volt_get_block(struct nvm_ppa_addr addr){
     VoltBlock *blk;
 
     ch = &volt->channels[addr.g.ch];
-    lun = ch->lun_offset + addr.g.lun;
-    blk = lun->blk_offset +
-                   (addr.g.blk * volt_mmgr.geometry->n_of_planes) + addr.g.pl;
-
+    lun = &ch->lun_offset[addr.g.lun];
+    blk = &lun->blk_offset[addr.g.blk * volt_mmgr.geometry->n_of_planes +
+                                                                    addr.g.pl];
     return blk;
 }
 
-static size_t volt_add_mem(int64_t bytes)
+static uint64_t volt_add_mem(uint64_t bytes)
 {
     volt->status.allocated_memory += bytes;
     return bytes;
 }
 
-static void volt_sub_mem(int64_t bytes)
+static void volt_sub_mem(uint64_t bytes)
 {
     volt->status.allocated_memory -= bytes;
 }
 
-static VoltPage *volt_init_page(VoltPage *pg)
+static void *volt_alloc (uint64_t sz)
 {
+    return g_malloc(volt_add_mem (sz));
+}
+
+static void volt_free (void *ptr, uint64_t sz)
+{
+    g_free (ptr);
+    volt_sub_mem(sz);
+}
+
+static void volt_free_page_data(VoltPage *pg)
+{
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    volt_free (pg->data, geo->pg_size + (geo->sec_oob_sz * geo->sec_per_pg));
+}
+
+static void volt_free_block_data (VoltBlock *blk)
+{
+    int i_pg;
+
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+
+    for (i_pg = 0; i_pg < geo->pg_per_blk; i_pg++)
+        volt_free_page_data (&blk->pages[i_pg]);
+
+    volt_free (blk->pages, sizeof(VoltPage) * geo->pg_per_blk);
+}
+
+static void volt_free_blocks (int nblk, int npg_lb, int free_pg_lb)
+{
+    int i_blk, i_pg;
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+
+    int total_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
+    /* Free pages in the completed allocated blocks */
+    for (i_blk = 0; i_blk < nblk; i_blk++)
+        volt_free_block_data (&volt->blocks[i_blk]);
+
+    /* Free pages in the last failed block */
+    for (i_pg = 0; i_pg < npg_lb; i_pg++)
+        volt_free_page_data (&volt->blocks[nblk].pages[i_pg]);
+
+    if (free_pg_lb)
+        volt_free (volt->blocks[nblk].pages,sizeof(VoltPage) * geo->pg_per_blk);
+
+    volt_free (volt->blocks, sizeof(VoltBlock) * total_blk);
+}
+
+static void volt_free_luns (int tot_blk)
+{
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    int total_luns = geo->lun_per_ch * geo->n_of_ch;
+
+    volt_free_blocks(tot_blk, 0, 0);
+    volt_free (volt->luns, sizeof (VoltLun) * total_luns);
+}
+
+static void volt_free_channels (int tot_blk)
+{
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+
+    volt_free_luns(tot_blk);
+    volt_free (volt->channels, sizeof (VoltCh) * geo->n_of_ch);
+}
+
+static void volt_free_dma_buf (void)
+{
+    int slots;
+
+    for (slots = 0; slots < VOLT_DMA_SLOT_INDEX; slots++)
+        volt_free (dma_buf[slots], VOLT_PAGE_SIZE + VOLT_SECTOR_SIZE);
+
+    volt_free (dma_buf, sizeof (void *) * VOLT_DMA_SLOT_INDEX);
+    volt_free (volt->edma, VOLT_PAGE_SIZE + VOLT_OOB_SIZE);
+}
+
+static void volt_clean_mem(void)
+{
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    int tot_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
+    volt_free_channels(tot_blk);
+    volt_free_dma_buf();
+}
+
+static int volt_init_page(VoltPage *pg)
+{
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+
     pg->state = 0;
-    return ++pg;
+    pg->data = volt_alloc(geo->pg_size + (geo->sec_oob_sz * geo->sec_per_pg));
+    if (!pg->data)
+        return -1;
+
+    return 0;
 }
 
 static int volt_init_blocks(void)
 {
     struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
 
-    int page_count = 0;
-    int i_blk;
-    int i_pg;
+    int page_count = 0, pg_blk, blk_count = 0, free_pg;
+    int i_blk, i_pg;
     int total_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
                                                                    geo->n_of_ch;
 
-    volt->blocks = g_malloc(volt_add_mem (sizeof(VoltBlock) * total_blk));
+    volt->blocks = volt_alloc(sizeof(VoltBlock) * total_blk);
     if (!volt->blocks)
-        return VOLT_MEM_ERROR;
+        return -1;
 
     for (i_blk = 0; i_blk < total_blk; i_blk++) {
         VoltBlock *blk = &volt->blocks[i_blk];
         blk->id = i_blk;
         blk->life = VOLT_BLK_LIFE;
 
-        blk->pages = g_malloc(volt_add_mem(sizeof(VoltPage) * geo->pg_per_blk));
+        pg_blk = 0;
+
+        free_pg = 0;
+        blk->pages = volt_alloc(sizeof(VoltPage) * geo->pg_per_blk);
         if (!blk->pages)
-            return VOLT_MEM_ERROR;
+            goto FREE;
+        free_pg = 1;
 
         blk->next_pg = blk->pages;
 
-        blk->data = g_malloc0(volt_add_mem((geo->pg_size +
-                        geo->sec_oob_sz * geo->sec_per_pg) * geo->pg_per_blk));
-        if (!blk->data)
-            return VOLT_MEM_ERROR;
-
-        VoltPage *pg = blk->pages;
         for (i_pg = 0; i_pg < geo->pg_per_blk; i_pg++) {
-            pg = volt_init_page(pg);
+            if (volt_init_page(&blk->pages[i_pg]))
+                goto FREE;
+
             page_count++;
+            pg_blk++;
         }
+        blk_count++;
     }
     return page_count;
+
+FREE:
+    volt_free_blocks (blk_count, pg_blk, free_pg);
+    return VOLT_MEM_ERROR;
 }
 
 static int volt_init_luns(void)
@@ -142,13 +239,13 @@ static int volt_init_luns(void)
     struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
     int total_luns = geo->lun_per_ch * geo->n_of_ch;
 
-    volt->luns = g_malloc(volt_add_mem(sizeof (VoltLun) * total_luns));
+    volt->luns = volt_alloc(sizeof (VoltLun) * total_luns);
     if (!volt->luns)
         return VOLT_MEM_ERROR;
 
-    for (i_lun = 0; i_lun < total_luns; i_lun++) {
+    for (i_lun = 0; i_lun < total_luns; i_lun++)
         volt->luns[i_lun].blk_offset = &volt->blocks[i_lun * geo->blk_per_lun];
-    }
+
     return VOLT_MEM_OK;
 }
 
@@ -157,37 +254,44 @@ static int volt_init_channels(void)
     int i_ch;
     struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
 
-    volt->channels = g_malloc(volt_add_mem(sizeof (VoltCh) * geo->n_of_ch));
+    volt->channels = volt_alloc(sizeof (VoltCh) * geo->n_of_ch);
     if (!volt->channels)
         return VOLT_MEM_ERROR;
 
-    for (i_ch = 0; i_ch < geo->n_of_ch; i_ch++) {
+    for (i_ch = 0; i_ch < geo->n_of_ch; i_ch++)
         volt->channels[i_ch].lun_offset = &volt->luns[i_ch * geo->lun_per_ch];
-    }
+
     return VOLT_MEM_OK;
 }
 
-static void volt_clean_mem(void)
+static int volt_init_dma_buf (void)
 {
-    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    int slots = 0, slots_i;
 
-    int total_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
-                                                                   geo->n_of_ch;
+    volt->edma = volt_alloc(VOLT_PAGE_SIZE + VOLT_OOB_SIZE);
+    if (!volt->edma)
+        return -1;
 
-    int i;
-    for (i = 0; i < total_blk; i++) {
-        g_free(volt->blocks[i].data);
-        volt_sub_mem(geo->pg_size * geo->pg_per_blk);
+    dma_buf = volt_alloc(sizeof (void *) * VOLT_DMA_SLOT_INDEX);
+    if (!dma_buf)
+        goto FREE;
 
-        g_free(volt->blocks[i].pages);
-        volt_sub_mem(sizeof (VoltPage) * geo->pg_per_blk);
-
+    for (slots_i = 0; slots_i < VOLT_DMA_SLOT_INDEX; slots_i++) {
+        dma_buf[slots_i] = volt_alloc(VOLT_PAGE_SIZE + VOLT_SECTOR_SIZE);
+        if (!dma_buf[slots_i])
+            goto FREE_SLOTS;
+        slots++;
     }
-    g_free(volt->blocks);
-    volt_sub_mem(sizeof (VoltBlock) * total_blk);
 
-    g_free(volt->luns);
-    volt_sub_mem(sizeof (VoltLun) * geo->lun_per_ch);
+    return 0;
+
+FREE_SLOTS:
+        for (slots_i = 0; slots_i < slots; slots_i++)
+            volt_free (dma_buf[slots_i], VOLT_PAGE_SIZE + VOLT_SECTOR_SIZE);
+        volt_free (dma_buf, sizeof (void *) * VOLT_DMA_SLOT_INDEX);
+FREE:
+    volt_free (volt->edma, VOLT_PAGE_SIZE + VOLT_OOB_SIZE);
+    return -1;
 }
 
 static int volt_host_dma_helper (struct nvm_mmgr_io_cmd *nvm_cmd)
@@ -268,7 +372,7 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
     struct volt_dma *dma = (struct volt_dma *) cmd->rsvd;
     uint32_t pg_size = volt_mmgr.geometry->pg_size +
             (volt_mmgr.geometry->sec_oob_sz * volt_mmgr.geometry->sec_per_pg);
-    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    int pg_i;
 
     blk = volt_get_block(cmd->ppa);
 
@@ -278,7 +382,7 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
         case MMGR_READ_PG:
             dir = VOLT_DMA_READ;
         case MMGR_WRITE_PG:
-            volt_nand_dma (&blk->data[cmd->ppa.g.pg * pg_size],
+            volt_nand_dma (blk->pages[cmd->ppa.g.pg].data,
                                                 dma->virt_addr, pg_size, dir);
             break;
         case MMGR_ERASE_BLK:
@@ -288,8 +392,9 @@ static int volt_process_io (struct nvm_mmgr_io_cmd *cmd)
                 dma->status = 0;
                 return -1;
             }
-            memset(blk->data, 0x0, (geo->pg_size +
-                        geo->sec_oob_sz * geo->sec_per_pg) * geo->pg_per_blk);
+            for (pg_i = 0; pg_i < volt_mmgr.geometry->pg_per_blk; pg_i++)
+                memset(blk->pages[pg_i].data, 0xff, pg_size);
+
             break;
         default:
             dma->status = 0;
@@ -352,42 +457,6 @@ static int volt_enqueue_io (struct nvm_mmgr_io_cmd *io)
     return (retry) ? 0 : -1;
 }
 
-static int volt_init_dma_buf (void)
-{
-    int slots;
-
-    volt->edma = g_malloc (VOLT_PAGE_SIZE + VOLT_OOB_SIZE * VOLT_PAGE_COUNT);
-    if (!volt->edma)
-        return -1;
-
-    dma_buf = g_malloc(sizeof (void *) * VOLT_DMA_SLOT_INDEX);
-    if (!dma_buf)
-        goto FREE;
-
-    for (slots = 0; slots < VOLT_DMA_SLOT_INDEX; slots++) {
-        dma_buf[slots] = g_malloc(volt_add_mem
-                                          (VOLT_PAGE_SIZE + VOLT_SECTOR_SIZE));
-    }
-
-    return 0;
-
-FREE:
-    g_free (volt->edma);
-    return -1;
-}
-
-static void volt_free_dma_buf (void)
-{
-    int slots;
-
-    for (slots = 0; slots < VOLT_DMA_SLOT_INDEX; slots++) {
-        g_free(dma_buf[slots]);
-        volt_sub_mem(VOLT_PAGE_SIZE + VOLT_SECTOR_SIZE);
-    }
-    g_free(dma_buf);
-    g_free(volt->edma);
-}
-
 static int volt_prepare_rw (struct nvm_mmgr_io_cmd *cmd_nvm)
 {
     struct volt_dma *dma = (struct volt_dma *) cmd_nvm->rsvd;
@@ -405,12 +474,12 @@ static int volt_prepare_rw (struct nvm_mmgr_io_cmd *cmd_nvm)
 
     memset(dma, 0, sizeof(struct volt_dma));
 
-    uint32_t prp_map = volt_get_next_prp(dma);
+    uint64_t prp_map = volt_get_next_prp(dma);
 
     dma->virt_addr = dma_buf[prp_map];
 
     if (cmd_nvm->cmdtype == MMGR_READ_PG)
-        memset(dma->virt_addr, 0, pg_sz + oob_sz);
+        memset(dma->virt_addr, 0, pg_sz + sec_sz);
 
     cmd_nvm->n_sectors = cmd_nvm->pg_sz / sec_sz;
 
@@ -448,7 +517,7 @@ static int volt_write_page (struct nvm_mmgr_io_cmd *cmd_nvm)
     if (volt_prepare_rw(cmd_nvm))
         goto CLEAN;
 
-    if(volt_enqueue_io (cmd_nvm))
+    if (volt_enqueue_io (cmd_nvm))
         goto CLEAN;
 
     return 0;
@@ -477,16 +546,15 @@ static void volt_exit (struct nvm_mmgr *mmgr)
 {
     int i;
     volt_clean_mem();
-    volt_free_dma_buf();
     volt->status.active = 0;
     ox_mq_destroy(volt->mq);
     pthread_mutex_destroy(&prp_mutex);
     pthread_mutex_destroy(&prpmap_mutex);
     for (i = 0; i < mmgr->geometry->n_of_ch; i++) {
-        free(mmgr->ch_info->mmgr_rsv_list);
+        g_free(mmgr->ch_info->mmgr_rsv_list);
         free(mmgr->ch_info->ftl_rsv_list);
     }
-    free (volt);
+    g_free (volt);
 }
 
 static int volt_set_ch_info (struct nvm_channel *ch, uint16_t nc)
@@ -517,7 +585,7 @@ static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
 
         ch[i].mmgr_rsv = VOLT_RSV_BLK;
         trsv = ch[i].mmgr_rsv * VOLT_PLANE_COUNT;
-        ch[i].mmgr_rsv_list = malloc (trsv * sizeof(struct nvm_ppa_addr));
+        ch[i].mmgr_rsv_list = g_malloc (trsv * sizeof(struct nvm_ppa_addr));
 
         if (!ch[i].mmgr_rsv_list)
             return EMEM;
@@ -585,35 +653,46 @@ static void *volt_queue_show (void *arg)
 
 static int volt_init(void)
 {
-    int pages_ok;
-    int res_l;
-    int res_c;
-    int ret;
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    int tot_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
 
-    volt = malloc (sizeof (VoltCtrl));
+    volt = g_malloc (sizeof (VoltCtrl));
     if (!volt)
         return -1;
 
     volt->status.allocated_memory = 0;
 
-    ret = volt_start_prp_map();
-    if (ret)
-        return ret;
+    if (volt_start_prp_map())
+        goto OUT;
 
-    /* Memory allocation. For now only LUNs, blocks and pages */
-    pages_ok = volt_init_blocks();
-    res_l = volt_init_luns();
-    res_c = volt_init_channels();
-    ret = volt_init_dma_buf();
+    if (!volt_init_blocks())
+        goto OUT;
+
+    if (!volt_init_luns()) {
+        volt_free_blocks(tot_blk, 0, 0);
+        goto OUT;
+    }
+
+    if (!volt_init_channels()) {
+        volt_free_luns(tot_blk);
+        goto OUT;
+    }
+
+    if (volt_init_dma_buf()) {
+        volt_free_channels(tot_blk);
+        goto OUT;
+    }
+
     volt->mq = ox_mq_init(&volt_mq);
-
-    if (!pages_ok || !res_l || !res_c || ret || !volt->mq)
-        goto MEM_CLEAN;
+    if (!volt->mq) {
+        volt_clean_mem();
+        goto OUT;
+    }
 
     /* DEBUG: Thread to show multi-queue statistics */
     pthread_t debug_th;
     pthread_create(&debug_th,NULL,volt_queue_show,NULL);
-
 
     volt->status.ready = 1; /* ready to use */
 
@@ -623,9 +702,8 @@ static int volt_init(void)
                                       volt->status.allocated_memory / 1048576);
     return 0;
 
-MEM_CLEAN:
-    volt->status.ready = 0;
-    volt_clean_mem();
+OUT:
+    g_free (volt);
     printf(" [volt: Not initialized! Memory allocation failed.]\n");
     printf(" [volt: Volatile memory usage: %lu bytes.]\n",
                                                 volt->status.allocated_memory);

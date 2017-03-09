@@ -37,11 +37,12 @@
 typedef struct VoltStatus {
     uint8_t     ready; /* 0x00-busy, 0x01-ready to use */
     uint8_t     active;
-    int64_t     allocated_memory;
+    uint64_t    allocated_memory;
 } VoltStatus;
 
 typedef struct VoltPage {
     uint8_t         state; /* 0x00-free, 0x01-alive, 0x02-invalid */
+    uint8_t         *data;
 } VoltPage;
 
 typedef struct VoltBlock {
@@ -49,7 +50,6 @@ typedef struct VoltBlock {
     uint16_t        life; /* available writes before die */
     VoltPage        *next_pg;
     VoltPage        *pages;
-    uint8_t         *data;
 } VoltBlock;
 
 typedef struct VoltLun {
