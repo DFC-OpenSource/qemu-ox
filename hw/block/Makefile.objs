@@ -19,6 +19,7 @@ common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/nvme_cmd.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/mmgr/dfc_nand/dfc_nand.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/mmgr/volt/volt.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/lnvm/ftl_lnvm.o
+common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/lnvm/lnvm_bbtbl.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/pcie_dfc/pcie_dfc.o
 
 obj-$(CONFIG_SH4) += tc58128.o

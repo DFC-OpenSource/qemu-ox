@@ -188,8 +188,6 @@ static int nvme_init_ctrl (NvmeCtrl *n)
     if (!n->elpes || !n->aer_reqs)
         return EMEM;
 
-    LIST_INIT (&n->ext_list);
-
     memset(&n->stat, 0, sizeof(NvmeStats));
 
     return 0;
@@ -482,13 +480,13 @@ void nvme_free_cq (NvmeCQ *cq, NvmeCtrl *n)
 static void nvme_clear_ctrl (NvmeCtrl *n)
 {
     NvmeAsyncEvent *event;
-    NvmeRequest *req;
     int i;
 
     if (!n->running) {
     	/*nvme not in action.. so nothing to stop*/
 	return;
     }
+
     n->running = 0;
     if (n->sq) {
         for (i = 0; i < n->num_queues; i++) {
@@ -506,21 +504,13 @@ static void nvme_clear_ctrl (NvmeCtrl *n)
 	}
     }
 
-    /* Free requests allocated later */
-    while (!LIST_EMPTY(&n->ext_list)) {
-        req = LIST_FIRST (&n->ext_list);
-        if (req) {
-            LIST_REMOVE (req, ext_req);
-            free (req);
-        }
-    }
-
-    pthread_spin_lock(&n->aer_req_spin);
+    pthread_mutex_lock(&n->aer_req_mutex);
     while((event = (NvmeAsyncEvent *)TAILQ_FIRST(&n->aer_queue)) != NULL) {
         TAILQ_REMOVE(&n->aer_queue, event, entry);
         FREE_VALID(event);
     }
-    pthread_spin_unlock(&n->aer_req_spin);
+    pthread_mutex_unlock(&n->aer_req_mutex);
+
     n->nvme_regs.vBar.cc = 0;
     n->nvme_regs.vBar.csts = 0;
     n->features.temp_thresh = 0x14d;
@@ -796,9 +786,9 @@ void nvme_enqueue_event (NvmeCtrl *n, uint8_t event_type,
     event->result.event_info = event_info;
     event->result.log_page   = log_page;
 
-    pthread_spin_lock(&n->aer_req_spin);
+    pthread_mutex_lock(&n->aer_req_mutex);
     TAILQ_INSERT_TAIL (&n->aer_queue, event, entry);
-    pthread_spin_unlock(&n->aer_req_spin);
+    pthread_mutex_unlock(&n->aer_req_mutex);
 }
 
 void nvme_post_cqes (void *opaque)
@@ -1157,13 +1147,11 @@ void nvme_exit(void)
 #if LIGHTNVM
     if (lnvm_dev(n))
         lightnvm_exit(n);
-
-    /* TODO free tbl and bbtbl in namespaces */
 #endif /* LIGHTNVM */
 
     pthread_mutex_destroy(&n->req_mutex);
-    pthread_spin_destroy(&n->qs_req_spin);
-    pthread_spin_destroy(&n->aer_req_spin);
+    pthread_mutex_destroy(&n->qs_req_mutex);
+    pthread_mutex_destroy(&n->aer_req_mutex);
 }
 
 int nvme_init(NvmeCtrl *n)

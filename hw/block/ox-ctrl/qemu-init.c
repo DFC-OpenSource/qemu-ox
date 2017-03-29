@@ -19,7 +19,8 @@ static int ox_init(PCIDevice *pci_dev)
     argv[0] = malloc (8);
     argv[1] = malloc (6);
     memcpy(argv[0], "ox-ctrl\0", 8);
-    memcpy(argv[1], "debug\0", 6);
+    memcpy(argv[1], qemuOxCtrl->mode, 5);
+    argv[1][5] = '\0';
 
     blkconf_serial(&qemuOxCtrl->conf, &qemuOxCtrl->serial);
 
@@ -37,6 +38,7 @@ static void ox_exit(PCIDevice *pci_dev)
 static Property ox_props[] = {
     DEFINE_BLOCK_PROPERTIES(QemuOxCtrl, conf),
     DEFINE_PROP_STRING("serial", QemuOxCtrl, serial),
+    DEFINE_PROP_STRING("mode", QemuOxCtrl, mode),
     DEFINE_PROP_END_OF_LIST(),
 };
 
