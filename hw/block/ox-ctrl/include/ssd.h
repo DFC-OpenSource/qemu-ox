@@ -384,6 +384,7 @@ typedef struct QemuOxCtrl {
     uint32_t        reg_size;
     uint32_t        num_queues;
     char            *serial;
+    char            *mode;
 } QemuOxCtrl;
 
 struct core_struct {
