@@ -266,9 +266,10 @@ static int lnvm_submit_io (struct nvm_io_cmd *cmd)
 
 static int lnvm_init_channel (struct nvm_channel *ch)
 {
-    struct lnvm_channel *lch;
     uint32_t tblks;
     int ret, trsv, n, pl, n_pl;
+    struct lnvm_channel *lch;
+    struct lnvm_bbtbl *bbt;
 
     n_pl = ch->geometry->n_of_planes;
     ch->ftl_rsv = FTL_LNVM_RSV_BLK;
@@ -301,36 +302,37 @@ static int lnvm_init_channel (struct nvm_channel *ch)
     if (!lch->bbtbl)
         goto FREE_LCH;
 
-    lch->bbtbl->tbl = malloc (sizeof(uint8_t) * tblks);
-    if (!lch->bbtbl->tbl)
+    bbt = lch->bbtbl;
+    bbt->tbl = malloc (sizeof(uint8_t) * tblks);
+    if (!bbt->tbl)
         goto FREE_BBTBL;
 
-    memset (lch->bbtbl->tbl, 0, tblks);
-    lch->bbtbl->magic = 0;
-    lch->bbtbl->bb_sz = tblks;
+    memset (bbt->tbl, 0, tblks);
+    bbt->magic = 0;
+    bbt->bb_sz = tblks;
 
-    ret = lnvm_get_bbt_nvm(lch, lch->bbtbl);
+    ret = lnvm_get_bbt_nvm(lch, bbt);
     if (ret) goto ERR;
 
     /* create and flush bad block table if it does not exist */
     /* this procedure will erase the entire device (only in test mode) */
-    if (lch->bbtbl->magic == FTL_LNVM_MAGIC) {
+    if (bbt->magic == FTL_LNVM_MAGIC) {
         printf(" [lnvm: Channel %d. Creating bad block table...\n", ch->ch_id);
-        ret = lnvm_bbt_create (lch, lch->bbtbl);
+        ret = lnvm_bbt_create (lch, bbt);
         if (ret) goto ERR;
-        ret = lnvm_flush_bbt (lch, lch->bbtbl);
+        ret = lnvm_flush_bbt (lch, bbt);
         if (ret) goto ERR;
     }
 
     LIST_INSERT_HEAD(&ch_head, lch, entry);
     log_info("    [lnvm: channel %d started with %d bad blocks.\n",ch->ch_id,
-                                                          lch->bbtbl->bb_count);
+                                                                bbt->bb_count);
     return 0;
 
 ERR:
-    free(lch->bbtbl->tbl);
+    free(bbt->tbl);
 FREE_BBTBL:
-    free(lch->bbtbl);
+    free(bbt);
 FREE_LCH:
     free(lch);
     log_err("[lnvm ERR: Ch %d -> Not possible to read/create bad block "

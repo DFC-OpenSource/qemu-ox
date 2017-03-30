@@ -103,7 +103,7 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
 static int lnvm_io_rsv_blk (struct nvm_channel *ch, uint8_t cmdtype,
                                                    void **buf_vec, uint16_t pg)
 {
-    int ret, pl;
+    int pl, ret = -1;
     void *buf = NULL;
     struct nvm_mmgr_io_cmd *cmd = malloc(sizeof(struct nvm_mmgr_io_cmd));
     if (!cmd)
@@ -145,31 +145,33 @@ int lnvm_flush_bbt (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt)
     int ret, pg, i;
     struct lnvm_bbtbl nvm_bbt;
     struct nvm_channel *ch = lch->ch;
-    void *buf_vec[ch->geometry->n_of_planes];
+    uint8_t n_pl = ch->geometry->n_of_planes;
+    uint32_t pg_sz = ch->geometry->pg_size;
     uint8_t *buf;
-    uint16_t buf_sz = ch->geometry->pg_size + ch->geometry->sec_oob_sz
+    uint16_t buf_sz = pg_sz + ch->geometry->sec_oob_sz
                                                     * ch->geometry->sec_per_pg;
+    void *buf_vec[n_pl];
 
-    if (bbt->bb_sz > ch->geometry->pg_size) {
+    if (bbt->bb_sz > pg_sz) {
         log_err("[lnvm ERR: Ch %d -> Maximum Bad block Table size: %d blocks\n",
-                                             ch->ch_id, ch->geometry->pg_size);
+                                                            ch->ch_id, pg_sz);
         return -1;
     }
 
-    buf = calloc(buf_sz * ch->geometry->n_of_planes, 1);
+    buf = calloc(buf_sz * n_pl, 1);
     if (!buf)
         return EMEM;
 
-    for (i = 0; i < ch->geometry->n_of_planes; i++)
+    for (i = 0; i < n_pl; i++)
         buf_vec[i] = buf + i * buf_sz;
 
     pg = 0;
     do {
-        memset (buf, 0, buf_sz * ch->geometry->n_of_planes);
+        memset (buf, 0, buf_sz * n_pl);
         ret = lnvm_io_rsv_blk (ch, MMGR_READ_PG, buf_vec, pg);
 
         /* get info from OOB area */
-        memcpy (&nvm_bbt, buf + ch->geometry->pg_size,sizeof(struct lnvm_bbtbl));
+        memcpy(&nvm_bbt, buf + pg_sz, sizeof(struct lnvm_bbtbl));
 
         if (ret || nvm_bbt.magic != FTL_LNVM_MAGIC)
             break;
@@ -186,12 +188,12 @@ int lnvm_flush_bbt (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt)
         pg = 0;
     }
 
-    memset (buf, 0, buf_sz * ch->geometry->n_of_planes);
+    memset (buf, 0, buf_sz * n_pl);
 
     /* set info to OOB area */
     bbt->magic = FTL_LNVM_MAGIC;
     bbt->bb_count = lnvm_count_bb (lch);
-    memcpy (&buf[ch->geometry->pg_size], bbt, sizeof(struct lnvm_bbtbl));
+    memcpy (&buf[pg_sz], bbt, sizeof(struct lnvm_bbtbl));
 
     /* set bad block table */
     memcpy (buf, bbt->tbl, bbt->bb_sz);
@@ -254,31 +256,33 @@ int lnvm_get_bbt_nvm (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt)
     int ret, pg, i;
     struct lnvm_bbtbl nvm_bbt;
     struct nvm_channel *ch = lch->ch;
-    void *buf_vec[ch->geometry->n_of_planes];
+    uint8_t n_pl = ch->geometry->n_of_planes;
+    uint32_t pg_sz = ch->geometry->pg_size;
+    void *buf_vec[n_pl];
     void *buf;
-    uint16_t buf_sz = ch->geometry->pg_size + ch->geometry->sec_oob_sz
+    uint16_t buf_sz = pg_sz + ch->geometry->sec_oob_sz
                                                     * ch->geometry->sec_per_pg;
 
-    if (bbt->bb_sz > ch->geometry->pg_size) {
+    if (bbt->bb_sz > pg_sz) {
         log_err("[lnvm ERR: Ch %d -> Maximum Bad block Table size: %d blocks\n",
-                                            ch->ch_id, ch->geometry->pg_size);
+                                                            ch->ch_id, pg_sz);
         return -1;
     }
 
-    buf = calloc(buf_sz * ch->geometry->n_of_planes, 1);
+    buf = calloc(buf_sz * n_pl, 1);
     if (!buf)
         return EMEM;
 
-    for (i = 0; i < ch->geometry->n_of_planes; i++)
+    for (i = 0; i < n_pl; i++)
         buf_vec[i] = buf + i * buf_sz;
 
     pg = 0;
     do {
-        memset (buf, 0, buf_sz * ch->geometry->n_of_planes);
+        memset (buf, 0, buf_sz * n_pl);
         ret = lnvm_io_rsv_blk (ch, MMGR_READ_PG, buf_vec, pg);
 
         /* get info from OOB area */
-        memcpy (&nvm_bbt, buf + ch->geometry->pg_size,sizeof(struct lnvm_bbtbl));
+        memcpy(&nvm_bbt, buf + pg_sz,sizeof(struct lnvm_bbtbl));
 
         if (ret || nvm_bbt.magic != FTL_LNVM_MAGIC)
             break;
