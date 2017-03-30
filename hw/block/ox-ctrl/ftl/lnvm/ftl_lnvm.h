@@ -15,9 +15,10 @@
 #include <sys/queue.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#define FTL_LNVM_IO_RETRY     0
-#define FTL_LNVM_RSV_BLK      1
-#define FTL_LNVM_MAGIC        0x3c
+#define FTL_LNVM_IO_RETRY       0
+#define FTL_LNVM_RSV_BLK        1
+#define FTL_LNVM_RSV_BLK_COUNT  1
+#define FTL_LNVM_MAGIC          0x3c
 
 enum {
     FTL_PGMAP_OFF   = 0,

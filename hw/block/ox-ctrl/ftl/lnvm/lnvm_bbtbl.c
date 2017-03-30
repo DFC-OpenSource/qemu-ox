@@ -111,7 +111,7 @@ static int lnvm_io_rsv_blk (struct nvm_channel *ch, uint8_t cmdtype,
 
     for (pl = 0; pl < ch->geometry->n_of_planes; pl++) {
         memset (cmd, 0, sizeof (struct nvm_mmgr_io_cmd));
-        cmd->ppa.g.blk = ch->mmgr_rsv;
+        cmd->ppa.g.blk = FTL_LNVM_RSV_BLK;
         cmd->ppa.g.pl = pl;
         cmd->ppa.g.ch = ch->ch_mmgr_id;
         cmd->ppa.g.lun = 0;

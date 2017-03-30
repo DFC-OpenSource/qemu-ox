@@ -272,7 +272,7 @@ static int lnvm_init_channel (struct nvm_channel *ch)
     struct lnvm_bbtbl *bbt;
 
     n_pl = ch->geometry->n_of_planes;
-    ch->ftl_rsv = FTL_LNVM_RSV_BLK;
+    ch->ftl_rsv = FTL_LNVM_RSV_BLK_COUNT;
     trsv = ch->ftl_rsv * n_pl;
     ch->ftl_rsv_list = realloc (ch->ftl_rsv_list,
                                            trsv * sizeof(struct nvm_ppa_addr));
