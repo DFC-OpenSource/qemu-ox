@@ -42,6 +42,7 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
 {
     int ret, i, pl, blk, lun, bb_count = 0;
     struct nvm_mmgr_io_cmd *cmd;
+    uint8_t n_pl = ch->geometry->n_of_planes;
 
     log_info("    [lnvm: Checking bad blocks on channel %d...]\n",ch->ch_id);
 
@@ -59,7 +60,7 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
 
     for (lun = 0; lun < ch->geometry->lun_per_ch; lun++) {
         for (blk = 0; blk < ch->geometry->blk_per_lun; blk++) {
-            for (pl = 0; pl < ch->geometry->n_of_planes; pl++) {
+            for (pl = 0; pl < n_pl; pl++) {
                 memset (cmd, 0, sizeof (struct nvm_mmgr_io_cmd));
                 cmd->ppa.g.blk = blk;
                 cmd->ppa.g.pl = pl;
@@ -68,9 +69,11 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
                 cmd->ppa.g.pg = 0;
 
                 /* Prevents erasing reserved blocks */
-                if (lnvm_contains_ppa(ch->mmgr_rsv_list, ch->mmgr_rsv,cmd->ppa))
+                if (lnvm_contains_ppa(ch->mmgr_rsv_list, ch->mmgr_rsv *
+                                                                n_pl, cmd->ppa))
                     continue;
-                if (lnvm_contains_ppa(ch->ftl_rsv_list, ch->ftl_rsv,cmd->ppa))
+                if (lnvm_contains_ppa(ch->ftl_rsv_list, ch->ftl_rsv *
+                                                                n_pl, cmd->ppa))
                     continue;
 
                 ret = nvm_submit_sync_io (ch, cmd, NULL, MMGR_ERASE_BLK);
@@ -80,13 +83,13 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
                     if (lnvm_contains_ppa(bbt, bb_count, cmd->ppa))
                         continue;
 
-                    bb_count = bb_count + ch->geometry->n_of_planes;
+                    bb_count = bb_count + n_pl;
                     bbt = realloc(bbt, sizeof(struct nvm_ppa_addr) * bb_count);
 
                     /* fill up bb table for all planes */
-                    for (i = ch->geometry->n_of_planes; i > 0; i--) {
+                    for (i = n_pl; i > 0; i--) {
                         memcpy(&bbt[bb_count - i], &cmd->ppa, sizeof(uint64_t));
-                        bbt[bb_count - i].g.pl = ch->geometry->n_of_planes - i;
+                        bbt[bb_count - i].g.pl = n_pl - i;
                     }
                     log_info("      [lnvm: bad block: lun %d, blk %d\n",
                                                                       lun, blk);

@@ -270,6 +270,7 @@ static int lnvm_init_channel (struct nvm_channel *ch)
     int ret, trsv, n, pl, n_pl;
     struct lnvm_channel *lch;
     struct lnvm_bbtbl *bbt;
+    struct nvm_ppa_addr *ppa;
 
     n_pl = ch->geometry->n_of_planes;
     ch->ftl_rsv = FTL_LNVM_RSV_BLK_COUNT;
@@ -284,8 +285,11 @@ static int lnvm_init_channel (struct nvm_channel *ch)
 
     for (n = 0; n < ch->ftl_rsv; n++) {
         for (pl = 0; pl < n_pl; pl++) {
-            ch->ftl_rsv_list[n_pl * n + pl].g.blk = n + ch->mmgr_rsv;
-            ch->ftl_rsv_list[n_pl * n + pl].g.pl = pl;
+            ppa = &ch->ftl_rsv_list[n_pl * n + pl];
+            ppa->g.ch = ch->ch_mmgr_id;
+            ppa->g.lun = 0;
+            ppa->g.blk = n + ch->mmgr_rsv;
+            ppa->g.pl = pl;
         }
     }
 

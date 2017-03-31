@@ -565,6 +565,7 @@ static int volt_set_ch_info (struct nvm_channel *ch, uint16_t nc)
 static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
 {
     int i, n, pl, nsp = 0, trsv;
+    struct nvm_ppa_addr *ppa;
 
     for(i = 0; i < nc; i++){
         ch[i].ch_mmgr_id = i;
@@ -594,8 +595,11 @@ static int volt_get_ch_info (struct nvm_channel *ch, uint16_t nc)
 
         for (n = 0; n < ch[i].mmgr_rsv; n++) {
             for (pl = 0; pl < VOLT_PLANE_COUNT; pl++) {
-                ch[i].mmgr_rsv_list[VOLT_PLANE_COUNT * n + pl].g.blk = n;
-                ch[i].mmgr_rsv_list[VOLT_PLANE_COUNT * n + pl].g.pl = pl;
+                ppa = &ch[i].mmgr_rsv_list[VOLT_PLANE_COUNT * n + pl];
+                ppa->g.ch = ch[i].ch_mmgr_id;
+                ppa->g.lun = 0;
+                ppa->g.blk = n;
+                ppa->g.pl = pl;
             }
         }
 
