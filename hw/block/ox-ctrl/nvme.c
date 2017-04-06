@@ -242,8 +242,10 @@ static int nvme_init_namespaces (NvmeCtrl *n)
 	id_ns->nuse = id_ns->ncap = id_ns->nsze = cpu_to_le64(blks);
 
 #if LIGHTNVM
-        if (lnvm_dev(n))
+        if (lnvm_dev(n)) {
             id_ns->vs[0] = 0x1;
+            id_ns->nsze = 0;
+        }
 #endif /* LIGHTNVM */
 
         ns->id = i + 1;
