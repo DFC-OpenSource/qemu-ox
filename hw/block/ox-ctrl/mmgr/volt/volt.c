@@ -10,7 +10,7 @@
 static u_atomic_t       nextprp;
 static pthread_mutex_t  prp_mutex;
 static pthread_mutex_t  prpmap_mutex;
-static uint64_t         prp_map;
+static uint64_t         prp_map[8];
 
 static VoltCtrl             *volt;
 static struct nvm_mmgr      volt_mmgr;
@@ -22,21 +22,20 @@ static int volt_start_prp_map(void)
     nextprp.counter = U_ATOMIC_INIT_RUNTIME(0);
     pthread_mutex_init (&prp_mutex, NULL);
     pthread_mutex_init (&prpmap_mutex, NULL);
-    prp_map = 0x0 & AND64;
-
+    memset (prp_map, 0x0, sizeof(uint64_t) * 8);
     return 0;
 }
 
 static void volt_set_prp_map(uint64_t index, uint8_t flag)
 {
     pthread_mutex_lock(&prpmap_mutex);
-    prp_map = (flag)
-            ? prp_map | (1 << (index - 1))
-            : prp_map ^ (1 << (index - 1));
+    prp_map[(index - 1) / 64] = (flag)
+            ? prp_map[(index - 1) / 64] | (1 << ((index - 1) % 64))
+            : prp_map[(index - 1) / 64] ^ (1 << ((index - 1) % 64));
     pthread_mutex_unlock(&prpmap_mutex);
 }
 
-static uint32_t volt_get_next_prp(struct volt_dma *dma){
+static uint64_t volt_get_next_prp(struct volt_dma *dma){
     uint64_t next = 0;
 
     do {
@@ -52,7 +51,7 @@ static uint32_t volt_get_next_prp(struct volt_dma *dma){
         pthread_mutex_unlock (&prp_mutex);
 
         pthread_mutex_lock(&prpmap_mutex);
-        if (prp_map & (1 << (next - 1))) {
+        if (prp_map[(next - 1) / 64] & (1 << ((next - 1) % 64))) {
             pthread_mutex_unlock(&prpmap_mutex);
             usleep(1);
             continue;
