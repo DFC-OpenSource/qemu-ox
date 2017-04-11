@@ -64,8 +64,7 @@ int nvm_register_pcie_handler (struct nvm_pcie *pcie)
     if (strlen(pcie->name) > MAX_NAME_SIZE)
         return EMAX_NAME_SIZE;
 
-    if(pthread_create (&pcie->io_thread, NULL, pcie->ops->nvme_consumer,
-                                                                  pcie->ctrl))
+    if(pthread_create (&pcie->io_thread, NULL, pcie->ops->nvme_consumer, pcie))
         return EPCIE_REGISTER;
 
     core.nvm_pcie = pcie;
@@ -179,26 +178,20 @@ static void nvm_ftl_process_to (void **opaque, int counter)
 
 int nvm_register_ftl (struct nvm_ftl *ftl)
 {
-    struct ox_mq_config *mq_config;
+    struct ox_mq_config mq_config;
 
     if (strlen(ftl->name) > MAX_NAME_SIZE)
         return EMAX_NAME_SIZE;
 
-    ftl->active = 1;
-
     /* Start FTL multi-queue */
-    mq_config = malloc (sizeof (struct ox_mq_config));
-    if (!mq_config)
-        return EMEM;
-
-    mq_config->n_queues = ftl->nq;
-    mq_config->q_size = NVM_FTL_QUEUE_SIZE;
-    mq_config->sq_fn = nvm_ftl_process_sq;
-    mq_config->cq_fn = nvm_ftl_process_cq;
-    mq_config->to_fn = nvm_ftl_process_to;
-    mq_config->to_usec = NVM_FTL_QUEUE_TO;
-    mq_config->flags = OX_MQ_TO_COMPLETE;
-    ftl->mq = ox_mq_init(mq_config);
+    mq_config.n_queues = ftl->nq;
+    mq_config.q_size = NVM_FTL_QUEUE_SIZE;
+    mq_config.sq_fn = nvm_ftl_process_sq;
+    mq_config.cq_fn = nvm_ftl_process_cq;
+    mq_config.to_fn = nvm_ftl_process_to;
+    mq_config.to_usec = NVM_FTL_QUEUE_TO;
+    mq_config.flags = OX_MQ_TO_COMPLETE;
+    ftl->mq = ox_mq_init(&mq_config);
     if (!ftl->mq)
         return -1;
 
@@ -609,6 +602,7 @@ static void nvm_unregister_mmgr (struct nvm_mmgr *mmgr)
     free(mmgr->ch_info);
     LIST_REMOVE(mmgr, entry);
     core.mmgr_count--;
+    log_info(" [nvm: Media Manager unregistered: %s]\n", mmgr->name);
 }
 
 static void nvm_unregister_ftl (struct nvm_ftl *ftl)
@@ -617,12 +611,11 @@ static void nvm_unregister_ftl (struct nvm_ftl *ftl)
         return;
 
     ox_mq_destroy(ftl->mq);
-    free (ftl->mq->config);
     core.ftl_q_count -= ftl->nq;
-    ftl->active = 0;
     ftl->ops->exit(ftl);
     LIST_REMOVE(ftl, entry);
     core.ftl_count--;
+    log_info(" [nvm: FTL (%s)(%d) unregistered.]\n", ftl->name, ftl->ftl_id);
 }
 
 static int nvm_ch_config (void)
@@ -766,6 +759,7 @@ static int nvm_init (void)
     core.nvm_nvme_ctrl = malloc (sizeof (NvmeCtrl));
     if (!core.nvm_nvme_ctrl)
         return EMEM;
+    core.nvm_nvme_ctrl->running = 1; /* not ready */
     core.run_flag |= RUN_NVME_ALLOC;
 
     /* media managers */
@@ -795,6 +789,7 @@ static int nvm_init (void)
     ret = nvme_init(core.nvm_nvme_ctrl);
     if(ret) goto OUT;
     core.run_flag |= RUN_NVME;
+    core.nvm_nvme_ctrl->running = 0; /* ready */
 
     /* pci handler */
     ret = dfcpcie_init();
