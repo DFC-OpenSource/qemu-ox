@@ -368,10 +368,10 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
 
     /* Check if request is a TIMEOUT_COMPLETED but not TIMEOUT_BACK */
     if (req_sq->status == OX_MQ_TIMEOUT_COMPLETED) {
+        req_sq->status = OX_MQ_TIMEOUT_BACK;
         ox_mq_free_entry(mq, req_sq);
         u_atomic_inc(&mq->stats.to_back);
         pthread_mutex_unlock (&req_sq->entry_mutex);
-        req_sq->status = OX_MQ_TIMEOUT_BACK;
         return -1;
     }
 
@@ -401,7 +401,7 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
         ox_mq_reset_entry (req_sq);
         OX_MQ_ENQUEUE (&q->sq_free,req_sq,&q->sq_free_mutex,&q->stats.sq_free);
     }
-    pthread_mutex_unlock (&req_sq->entry_mutex); /**/
+    pthread_mutex_unlock(&req_sq->entry_mutex);
 
     pthread_mutex_lock (&q->cq_used_mutex);
     if (TAILQ_EMPTY (&q->cq_used))
@@ -642,8 +642,13 @@ static void ox_mq_free_ext_list (struct ox_mq *mq)
 void ox_mq_destroy (struct ox_mq *mq)
 {
     ox_mq_free_queues(mq, mq->config->n_queues);
-    pthread_join (mq->to_tid, NULL);
-    ox_mq_free_ext_list (mq);
+    if (mq->config->to_usec) {
+        pthread_cancel(mq->to_tid);
+        pthread_join (mq->to_tid, NULL);
+        ox_mq_free_ext_list (mq);
+    }
     free (mq->queues);
+    free (mq->config);
     free (mq);
+    log_info (" [ox-mq: Multi queue stopped]\n");
 }
