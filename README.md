@@ -21,18 +21,16 @@ mode options:
 ```
 You can run some tests from the host using the follow Linux kernel and liblightnvm (user space library for Open-Channel SSDs):
 ```
-Kernel:          https://github.com/ivpi/linux-liblnvm
+Kernel:          4.11 or higher
 
-Liblightnvm:     https://github.com/ivpi/liblightnvm
+Liblightnvm:     https://github.com/OpenChannelSSD/liblightnvm
 
 More info: https://github.com/DFC-OpenSource/ox-ctrl/blob/master/README.md
 ```
-You need to initialize your OX Open-Channel SSD using the nvme-cli:
+Check if device is initialized:
 ```
-https://github.com/linux-nvme/nvme-cli
-
-$ sudo nvme lnvm init -d nvme0n1
 $ sudo nvme lnvm list (check if the device has 'gennvm' in the Media Manager)
+$ dmesg | nvme (check if device geometry is shown in the log)
 ```
 
 OX in QEMU comes with VOLT, a Media Manager that implements volatile storage, for now all the data stored in the virtual Open-Channel SSD are gone when you close QEMU. The device has a fixed geometry for now:
@@ -51,7 +49,7 @@ OOB Size per Page   1 KB
 Total of 4352 MB of volatile Open-Channel SSD. You need enough memory available when you start QEMU.
 ```
 
-A default debug is enable, you can see all Admin and IO commands being printed in the host machine, redirect it to a file or to /dev/null if you don't want to print it. An example of IO command debug:
+In debug mode, you will see, for instance:
 
 ```
 [15153] IO CMD 0x91, nsid: 1, cid: 719
