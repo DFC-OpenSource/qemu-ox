@@ -10,6 +10,7 @@
 #define LNVM_PG_BLK         128
 #define LNVM_CH             8
 #define LNVM_LUN_CH         4
+#define LNVM_BLK_LUN        32
 #define LNVM_PLANES         2
 #define LNVM_PG_SIZE        (LNVM_SECSZ * LNVM_SEC_PG)
 #define LNVM_PL_PG_SIZE     (LNVM_SECSZ * LNVM_SEC_PG * LNVM_PLANES)
@@ -121,6 +122,7 @@ typedef struct LnvmParams {
     uint8_t     num_ch;
     uint8_t     num_pln;
     uint8_t     num_lun;
+    uint16_t    num_blk;
     /* calculated values */
     uint32_t    sec_per_phys_pl;
     uint32_t    sec_per_log_pl;

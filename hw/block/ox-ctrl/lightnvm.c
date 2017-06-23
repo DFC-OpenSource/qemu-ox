@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <errno.h>
+#include <math.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
 #if LIGHTNVM
@@ -48,6 +49,7 @@ void lnvm_set_default(LnvmCtrl *ctrl)
     ctrl->params.fmtype = LNVM_FMTYPE;
     ctrl->params.num_ch = LNVM_CH;
     ctrl->params.num_lun = LNVM_LUN_CH;
+    ctrl->params.num_blk = LNVM_BLK_LUN;
     ctrl->params.num_pln = LNVM_PLANES;
     ctrl->bb_gen_freq = LNVM_BB_GEN_FREQ;
     ctrl->err_write = LNVM_ERR_WRITE;
@@ -377,24 +379,27 @@ static int lightnvm_flush_tbls(NvmeCtrl *n)
 
 void lnvm_init_id_ctrl(LnvmIdCtrl *ln_id)
 {
+    struct LnvmIdAddrFormat *ppaf = &ln_id->ppaf;
+
     ln_id->ver_id = LNVM_VER_ID;
     ln_id->vmnt = LNVM_VMNT;
     ln_id->cgrps = LNVM_CGRPS;
     ln_id->cap = LNVM_CAP;
     ln_id->dom = LNVM_DOM;
 
-    ln_id->ppaf.blk_offset = 0;
-    ln_id->ppaf.blk_len = 16;
-    ln_id->ppaf.pg_offset = 16;
-    ln_id->ppaf.pg_len = 16;
-    ln_id->ppaf.sect_offset = 32;
-    ln_id->ppaf.sect_len = 8;
-    ln_id->ppaf.pln_offset = 40;
-    ln_id->ppaf.pln_len = 8;
-    ln_id->ppaf.lun_offset = 48;
-    ln_id->ppaf.lun_len = 8;
-    ln_id->ppaf.ch_offset = 56;
-    ln_id->ppaf.ch_len = 8;
+    ppaf->sect_len    = log2 (LNVM_SEC_PG);
+    ppaf->pln_len     = log2 (LNVM_PLANES);
+    ppaf->ch_len      = log2 (LNVM_CH);
+    ppaf->lun_len     = log2 (LNVM_LUN_CH);
+    ppaf->pg_len      = log2 (LNVM_PG_BLK);
+    ppaf->blk_len     = log2 (LNVM_BLK_LUN);
+
+    ppaf->sect_offset  = 0;
+    ppaf->pln_offset  += ppaf->sect_len;
+    ppaf->ch_offset   += ppaf->pln_offset + ppaf->pln_len;
+    ppaf->lun_offset  += ppaf->ch_offset + ppaf->ch_len;
+    ppaf->pg_offset   += ppaf->lun_offset + ppaf->lun_len;
+    ppaf->blk_offset  += ppaf->pg_offset + ppaf->pg_len;
 }
 
 uint16_t lnvm_identity(NvmeCtrl *n, NvmeCmd *cmd)
