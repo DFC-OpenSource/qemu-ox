@@ -339,7 +339,7 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
     do {
         ret = ox_mq_submit_req(ftl->mq, qid, cmd);
 
-    	if (ret)
+        if (ret)
             retry--;
         else if (core.debug) {
             printf(" CMD cid: %lu, type: 0x%x submitted to FTL. "
