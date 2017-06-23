@@ -268,21 +268,20 @@ static inline uint64_t nvme_gen_to_dev_addr(LnvmCtrl *ln,struct nvm_ppa_addr *r)
 
 uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
 {
+    int i;
+    uint64_t sppa, eppa;
+
     LnvmCtrl *ln = &n->lightnvm_ctrl;
     LnvmRwCmd *lrw = (LnvmRwCmd *)cmd;
-    int i;
-
-    uint64_t sppa, eppa, sec_offset;
-    uint32_t nlb  = lrw->nlb + 1;
-    uint64_t prp1 = lrw->prp1;
-    uint64_t prp2 = lrw->prp2;
-    uint64_t spba = lrw->spba;
-    uint64_t meta = lrw->metadata;
     struct nvm_ppa_addr *psl = req->nvm_io.ppalist;
 
-    const uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
-    const uint8_t data_shift = ns->id_ns.lbaf[lba_index].ds;
-    const uint16_t oob = ns->id_ns.lbaf[lba_index].ms;
+    uint32_t nlb  = lrw->nlb + 1;
+    uint64_t spba = lrw->spba;
+    uint64_t meta = lrw->metadata;
+
+    uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
+    uint8_t data_shift = ns->id_ns.lbaf[lba_index].ds;
+    uint16_t oob = ns->id_ns.lbaf[lba_index].ms;
     uint64_t data_size = nlb << data_shift;
     uint32_t n_sectors = data_size / LNVM_SECSZ;
     uint32_t n_pages = data_size / LNVM_PG_SIZE;
@@ -291,7 +290,7 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
              (n_pages < 1) ? oob : nlb * oob :
              (n_pages < 1) ? LNVM_SEC_OOBSZ * n_sectors : nlb * LNVM_SEC_OOBSZ;
 
-    sec_offset = (data_size % LNVM_PG_SIZE) / (1 << data_shift);
+    uint64_t sec_offset = nlb % LNVM_SEC_PG;
 
     uint16_t is_write = (lrw->opcode == LNVM_CMD_PHYS_WRITE ||
                                           lrw->opcode == LNVM_CMD_HYBRID_WRITE);
@@ -318,15 +317,13 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
     if (n_sectors > 1)
         eppa = nvme_gen_to_dev_addr(ln, &psl[n_sectors - 1]);
 
-    req->nvm_io.prp[0] = prp1;
+    req->nvm_io.prp[0] = lrw->prp1;
 
-    if (n_sectors == 2) {
-        req->nvm_io.prp[1] = prp2;
-    }
-
-    if (n_sectors > 2)
-        nvme_read_from_host((void *)(&req->nvm_io.prp[1]), prp2, (n_sectors-1)
-                                                        * sizeof(uint64_t));
+    if (n_sectors == 2)
+        req->nvm_io.prp[1] = lrw->prp2;
+    else if (n_sectors > 2)
+        nvme_read_from_host((void *)(&req->nvm_io.prp[1]), lrw->prp2,
+                                             (n_sectors-1) * sizeof(uint64_t));
 
     meta_size = (meta) ? meta_size : 0;
     req->slba = sppa;
@@ -341,7 +338,11 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
     req->nvm_io.cmdtype = (req->is_write) ? MMGR_WRITE_PG : MMGR_READ_PG;
     req->nvm_io.n_sec = nlb;
     req->nvm_io.req = (void *) req;
-    req->nvm_io.sec_offset = sec_offset; // 4k page inside a plane page
+
+    /* sec_offset contains the number of sectors in the last page of the
+       command. If sec_offset is 0, the last page contains LNVM_SEC_PG sects */
+    req->nvm_io.sec_offset = sec_offset;
+
     req->nvm_io.status.pg_errors = 0;
     req->nvm_io.status.ret_t = 0;
     req->nvm_io.status.pgs_p = 0;
@@ -453,7 +454,7 @@ int lnvm_init(NvmeCtrl *n)
         c->num_pg = ln->params.pgs_per_blk;
         c->csecs = ln->params.sec_size;
         c->fpg_sz = ln->params.sec_size * ln->params.secs_per_pg;
-        c->sos =  LNVM_SEC_OOBSZ * LNVM_SEC_PG;
+        c->sos =  LNVM_SEC_OOBSZ;
         c->trdt = LNVM_TRDT;
         c->trdm = LNVM_TRDM;
         c->tprt = LNVM_TPRT;
