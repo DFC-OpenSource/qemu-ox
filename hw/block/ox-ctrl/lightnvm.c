@@ -234,7 +234,6 @@ uint16_t lnvm_erase_sync(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->nvm_io.cmdtype = MMGR_ERASE_BLK;
     req->nvm_io.n_sec = nlb;
     req->nvm_io.req = (void *) req;
-    req->nvm_io.sec_offset = 0;
     req->nvm_io.status.pg_errors = 0;
     req->nvm_io.status.ret_t = 0;
     req->nvm_io.status.pgs_p = 0;
@@ -275,8 +274,8 @@ static inline uint64_t nvme_gen_to_dev_addr(LnvmCtrl *ln,struct nvm_ppa_addr *r)
 
 uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
 {
-    int i;
-    uint64_t sppa, eppa;
+    int i, pg, nsec;
+    uint64_t sppa, eppa, moff;
 
     LnvmCtrl *ln = &n->lightnvm_ctrl;
     LnvmRwCmd *lrw = (LnvmRwCmd *)cmd;
@@ -291,13 +290,8 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
     uint16_t oob = ns->id_ns.lbaf[lba_index].ms;
     uint64_t data_size = nlb << data_shift;
     uint32_t n_sectors = data_size / LNVM_SECSZ;
-    uint32_t n_pages = data_size / LNVM_PG_SIZE;
 
-    uint64_t meta_size = (LNVM_SEC_OOBSZ * n_sectors > oob) ?
-             (n_pages < 1) ? oob : nlb * oob :
-             (n_pages < 1) ? LNVM_SEC_OOBSZ * n_sectors : nlb * LNVM_SEC_OOBSZ;
-
-    uint64_t sec_offset = nlb % LNVM_SEC_PG;
+    uint64_t meta_size = oob * nlb;
 
     uint16_t is_write = (lrw->opcode == LNVM_CMD_PHYS_WRITE ||
                                           lrw->opcode == LNVM_CMD_HYBRID_WRITE);
@@ -346,31 +340,44 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
     req->nvm_io.n_sec = nlb;
     req->nvm_io.req = (void *) req;
 
-    /* sec_offset contains the number of sectors in the last page of the
-       command. If sec_offset is 0, the last page contains LNVM_SEC_PG sects */
-    req->nvm_io.sec_offset = sec_offset;
-
     req->nvm_io.status.pg_errors = 0;
     req->nvm_io.status.ret_t = 0;
     req->nvm_io.status.pgs_p = 0;
     req->nvm_io.status.pgs_s = 0;
-    req->nvm_io.status.total_pgs = (sec_offset) ? (nlb / LNVM_SEC_PG) + 1 :
-                                                                      n_pages;
     req->nvm_io.status.status = NVM_IO_NEW;
 
     for (i = 0; i < 8; i++)
         req->nvm_io.status.pg_map[i] = 0;
 
-    for (i = 0; i < req->nvm_io.status.total_pgs; i++) {
-        req->nvm_io.mmgr_io[i].pg_index = i;
-        req->nvm_io.mmgr_io[i].status = NVM_IO_SUCCESS;
-        req->nvm_io.mmgr_io[i].nvm_io = &req->nvm_io;
-        req->nvm_io.mmgr_io[i].pg_sz = LNVM_PG_SIZE;
-        req->nvm_io.mmgr_io[i].sync_count = NULL;
-        req->nvm_io.mmgr_io[i].sync_mutex = NULL;
-        req->nvm_io.md_prp[i] = (meta && meta_size) ?
-                                meta + (LNVM_SEC_OOBSZ * LNVM_SEC_PG * i) : 0;
+    pg = 0;
+    nsec = 0;
+    moff = meta;
+    for (i = 0; i <= nlb; i++) {
+        if ((i == nlb) || (i && (
+                      psl[i].g.ch != psl[i - 1].g.ch ||
+                      psl[i].g.lun != psl[i - 1].g.lun ||
+                      psl[i].g.blk != psl[i - 1].g.blk ||
+                      psl[i].g.pg != psl[i - 1].g.pg ||
+                      psl[i].g.pl != psl[i - 1].g.pl))) {
+
+            req->nvm_io.mmgr_io[pg].pg_index = pg;
+            req->nvm_io.mmgr_io[pg].status = NVM_IO_SUCCESS;
+            req->nvm_io.mmgr_io[pg].nvm_io = &req->nvm_io;
+            req->nvm_io.mmgr_io[pg].pg_sz = nsec * LNVM_SECSZ;
+            req->nvm_io.mmgr_io[pg].n_sectors = nsec;
+            req->nvm_io.mmgr_io[pg].sec_offset = i - nsec;
+            req->nvm_io.mmgr_io[pg].sync_count = NULL;
+            req->nvm_io.mmgr_io[pg].sync_mutex = NULL;
+            req->nvm_io.md_prp[pg] = (meta && meta_size) ? moff : 0;
+
+            pg++;
+            nsec = 0;
+            moff = meta + (oob * i);
+        }
+        nsec++;
     }
+
+    req->nvm_io.status.total_pgs = pg;
 
     if (core.debug)
         lnvm_debug_print_io (req->nvm_io.ppalist, req->nvm_io.prp,
