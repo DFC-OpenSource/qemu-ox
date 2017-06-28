@@ -19,18 +19,35 @@ mode options:
  'start' -> Run OX without debug
  'debug' -> Print all commands and internal values
 ```
-You can run some tests from the host using the follow Linux kernel and liblightnvm (user space library for Open-Channel SSDs):
+Check if device is initialized:
+```
+$ sudo nvme lnvm list (check if the device has 'gennvm' in the Media Manager)
+$ dmesg | nvme (check if device geometry is shown in the log)
+```
+To expose a block device, you need to follow the steps:
+```
+Kernel:          4.12 or higher with CONFIG_NVM_PBLK=y
+
+Use pblk target as a standard FTL:
+$ sudo nvme lnvm create -d nvme0n1 -t pblk -n nvme0n1_ox -b 0 -e 31
+
+Format and mount the block device:
+$ sudo fdisk /dev/nvme0n1_ox (if you want a partition table)
+$ sudo mkfs.ext4 /dev/nvme0n1_ox1
+$ sudo mount /dev/nvme0n1_ox1 <mounting_path>
+
+Change the permissions:
+$ sudo chown <your_user> <mounting_path>
+
+From now, you should see around 3.4 GB of storage ready to be used.
+```
+You can also run some tests from the host using the follow Linux kernel and liblightnvm (user space library for Open-Channel SSDs):
 ```
 Kernel:          4.11 or higher
 
 Liblightnvm:     https://github.com/OpenChannelSSD/liblightnvm
 
 More info: https://github.com/DFC-OpenSource/ox-ctrl/blob/master/README.md
-```
-Check if device is initialized:
-```
-$ sudo nvme lnvm list (check if the device has 'gennvm' in the Media Manager)
-$ dmesg | nvme (check if device geometry is shown in the log)
 ```
 
 OX in QEMU comes with VOLT, a Media Manager that implements volatile storage, for now all the data stored in the virtual Open-Channel SSD are gone when you close QEMU. The device has a fixed geometry for now:
