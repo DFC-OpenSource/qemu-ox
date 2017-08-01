@@ -33,6 +33,7 @@ struct lnvm_bbtbl {
     uint8_t  magic;
     uint32_t bb_sz;
     uint32_t bb_count;
+    /* This struct is stored on NVM up to this point, *tbl is not stored */
     uint8_t  *tbl;
 };
 
