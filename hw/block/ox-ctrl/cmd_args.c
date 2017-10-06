@@ -175,7 +175,6 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state)
 
     switch(key)
     {
-        printf("%s\n", arg);
         case ARGP_KEY_ARG:
             if (strcmp(arg, "start") == 0)
                 args->cmdtype = CMDARG_START;

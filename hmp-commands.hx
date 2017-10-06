@@ -1744,6 +1744,18 @@ ETEXI
     },
 
 STEXI
+@item ox-debug
+Prints Enables or disables debugging of ox (on/off)
+ETEXI
+
+    {
+        .name       = "ox_debug",
+       .args_type  = "on_off:s",
+       .params     = "on_off",
+       .help       = "Enables or disables debugging of ox (on/off)",
+       .mhandler.cmd = hmp_ox_debug,
+   },
+STEXI
 @item qom-set @var{path} @var{property} @var{value}
 Set QOM property @var{property} of object at location @var{path} to value @var{value}
 ETEXI
