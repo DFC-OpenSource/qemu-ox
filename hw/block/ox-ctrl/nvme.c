@@ -836,6 +836,14 @@ uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             if (NVME_OACS_FORMAT & n->id_ctrl.oacs)
                   return nvme_format (n, cmd);
             return NVME_INVALID_OPCODE | NVME_DNR;
+            
+        /* Near-data processing */
+        case NDP_ADM_CMD_INFO:
+            return NVME_SUCCESS;
+        case NDP_ADM_CMD_INST_DAEM:
+            return NVME_SUCCESS;
+        case NDP_ADM_CMD_DEL_DAEM:
+            return NVME_SUCCESS;
 
 #if LIGHTNVM
         case LNVM_ADM_CMD_IDENTITY:
@@ -875,7 +883,7 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         printf("\n[%lu] IO CMD 0x%x, nsid: %d, cid: %d\n",
                    n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);
 
-    switch (cmd->opcode) {
+    switch (cmd->opcode) {        
 #if LIGHTNVM
         case LNVM_CMD_PHYS_READ:
             n->stat.tot_num_ReadCmd += 1;
@@ -905,6 +913,12 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             return NVME_INVALID_OPCODE | NVME_DNR;
 #endif
 
+        /* Near-data processing */
+        case NDP_EXEC_RUN_JOB:
+            return NVME_SUCCESS;
+        case NDP_EXEC_DAEM_REQ:
+            return NVME_SUCCESS;
+            
         /* Commands not supported yet */
 
 	case NVME_CMD_FLUSH:
