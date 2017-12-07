@@ -17,21 +17,6 @@
 
 extern struct core_struct core;
 
-static int lnvm_contains_ppa (struct nvm_ppa_addr *list, uint32_t list_sz,
-                                                        struct nvm_ppa_addr ppa)
-{
-    int i;
-
-    if (!list)
-        return 0;
-
-    for (i = 0; i < list_sz; i++)
-        if (ppa.ppa == list[i].ppa)
-            return 1;
-
-    return 0;
-}
-
 /* Erases the entire channel, failed erase marks the block as bad
  * bbt -> bad block table pointer to be filled up
  * bbt_sz -> pointer to integer, function will set it up
@@ -69,10 +54,10 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
                 cmd->ppa.g.pg = 0;
 
                 /* Prevents erasing reserved blocks */
-                if (lnvm_contains_ppa(ch->mmgr_rsv_list, ch->mmgr_rsv *
+                if (nvm_contains_ppa(ch->mmgr_rsv_list, ch->mmgr_rsv *
                                                                 n_pl, cmd->ppa))
                     continue;
-                if (lnvm_contains_ppa(ch->ftl_rsv_list, ch->ftl_rsv *
+                if (nvm_contains_ppa(ch->ftl_rsv_list, ch->ftl_rsv *
                                                                 n_pl, cmd->ppa))
                     continue;
 
@@ -80,7 +65,7 @@ static struct nvm_ppa_addr *lnvm_check_ch_bb (struct nvm_ppa_addr *bbt,
 
                 if (ret) {
                     /* Avoids adding the same block (multiple plane failure) */
-                    if (lnvm_contains_ppa(bbt, bb_count, cmd->ppa))
+                    if (nvm_contains_ppa(bbt, bb_count, cmd->ppa))
                         continue;
 
                     bb_count = bb_count + n_pl;
@@ -208,11 +193,12 @@ OUT:
     return ret;
 }
 
-int lnvm_bbt_create (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt)
+int lnvm_bbt_create (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt,
+                                                                 uint8_t type)
 {
     int i, rsv, l_addr, b_addr, pl_addr, n_pl;
     struct nvm_ppa_addr *bbt_tmp;
-    uint16_t bb_count;
+    uint16_t bb_count = 0;
     struct nvm_channel *ch = lch->ch;
 
     n_pl = ch->geometry->n_of_planes;
@@ -238,10 +224,19 @@ int lnvm_bbt_create (struct lnvm_channel *lch, struct lnvm_bbtbl *bbt)
         bbt->tbl[l_addr + b_addr + pl_addr] = NVM_BBT_DMRK;
     }
 
-    /* Check for bad blocks in the whole channel */
-    bbt_tmp = lnvm_check_ch_bb (bbt_tmp, &bb_count, ch);
-    if (!bbt_tmp)
-        return -1;
+    if (type == LNVM_BBT_FULL) {
+        /* Check for bad blocks in the whole channel */
+        bbt_tmp = lnvm_check_ch_bb (bbt_tmp, &bb_count, ch);
+        if (!bbt_tmp)
+            return -1;
+    } else {
+        log_info("  [lnvm: Emergency bad block table created on channel %d. "
+               "It is recommended the creation using full scan.]\n", ch->ch_id);
+        printf ("  [WARNING: Emergency bad block table created on channel %d.\n"
+       "             Use 'ox-ctrl-test admin -t create-bbt' for full scan.]\n",
+                                                                     ch->ch_id);
+    }
+
     lch->bbtbl->bb_count = bb_count;
 
     for (i = 0; i < bb_count; i++) {
