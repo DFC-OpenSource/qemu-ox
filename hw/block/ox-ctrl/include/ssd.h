@@ -37,6 +37,16 @@
 #include "hw/block/block.h"
 #include "hw/pci/msix.h"
 
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
+#define VERSION     1
+#define PATCH       4
+#define SUBLEVEL    0
+#define LABEL       "The Lonely Dragon"
+#define OX_VER      STR(VERSION) "." STR(PATCH) "." STR(SUBLEVEL)
+#define OX_LABEL    OX_VER "-" LABEL
+
 #define TYPE_OX "ox-ctrl"
 #define OXCTRL(obj) \
         OBJECT_CHECK(QemuOxCtrl, (obj), TYPE_OX)

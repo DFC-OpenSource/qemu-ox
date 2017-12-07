@@ -182,7 +182,7 @@ static void nvm_ftl_process_to (void **opaque, int counter)
         counter--;
         cmd = (struct nvm_io_cmd *) opaque[counter];
         cmd->status.status = NVM_IO_FAIL;
-        cmd->status.nvme_status = NVME_CMD_ABORT_REQ;
+        cmd->status.nvme_status = NVME_MEDIA_TIMEOUT;
     }
 }
 
@@ -1021,7 +1021,7 @@ int nvm_init_ctrl (int argc, char **argv, QemuOxCtrl *qemu)
     LIST_INIT(&mmgr_head);
     LIST_INIT(&ftl_head);
 
-    printf("OX Controller is starting. Please, wait...\n");
+    printf("OX Controller %s - %s\n Starting...\n", OX_VER, LABEL);
     log_info("[nvm: OX Controller is starting...]\n");
 
     core.qemu = qemu;

@@ -5,7 +5,7 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 
 extern struct core_struct core;
-const char *argp_program_version = "ox-ctrl 1.0";
+const char *argp_program_version = OX_LABEL;
 const char *argp_program_bug_address = "Ivan L. Picoli <ivpi@itu.dk>";
 
 enum cmdtypes {
@@ -15,14 +15,14 @@ enum cmdtypes {
     CMDARG_ADMIN
 };
 
-static char doc_global[] = "\n*** OX Controller ***\n"
-        " \n An OpenChannel SSD Controller\n\n"
+static char doc_global[] = "\n*** OX Controller " OX_VER " - " LABEL " ***\n"
+        " \n The DFC Open-Channel SSD Controller\n\n"
         " Available commands:\n"
         "  start            Start controller with standard configuration\n"
         "  debug            Start controller and print Admin/IO commands\n"
         "  test             Start controller, run tests and close\n"
         "  admin            Execute specific tasks within the controller\n"
-        " \n Initial release developed by Ivan L. Picoli, the red-eagle\n\n";
+        " \n Initial release developed by Ivan L. Picoli <ivpi@itu.dk>\n\n";
 
 static char doc_test[] =
         "\nUse this command to run tests, it will start the controller,"
