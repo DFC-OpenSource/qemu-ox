@@ -158,6 +158,11 @@ static void dfcpcie_isr_notify (void *opaque)
     }
 }
 
+static void dfcpcie_reset (void)
+{
+    return;
+}
+
 static void dfcpcie_exit(void) {
     struct pci_ctrl *pcie = (struct pci_ctrl *) pcie_dfc.ctrl;
     msix_uninit_exclusive_bar(core.qemu->pci_dev);
@@ -168,7 +173,8 @@ static void dfcpcie_exit(void) {
 struct nvm_pcie_ops pcidfc_ops = {
     .nvme_consumer      = dfcpcie_req_processor,
     .exit               = dfcpcie_exit,
-    .isr_notify         = dfcpcie_isr_notify
+    .isr_notify         = dfcpcie_isr_notify,
+    .reset              = dfcpcie_reset
 };
 
 int dfcpcie_init(void)

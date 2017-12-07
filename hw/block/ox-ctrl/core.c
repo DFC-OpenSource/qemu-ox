@@ -632,6 +632,7 @@ static void nvm_unregister_mmgr (struct nvm_mmgr *mmgr)
     free(mmgr->ch_info);
     LIST_REMOVE(mmgr, entry);
     core.mmgr_count--;
+    core.nvm_ch_count -= mmgr->geometry->n_of_ch;
     log_info(" [nvm: Media Manager unregistered: %s]\n", mmgr->name);
 }
 
@@ -655,6 +656,8 @@ static int nvm_ch_config (void)
     core.nvm_ch = calloc(sizeof(struct nvm_channel *), core.nvm_ch_count);
     if (nvm_memcheck(core.nvm_ch))
         return EMEM;
+
+    core.nvm_ns_size = 0;
 
     struct nvm_channel *ch;
     struct nvm_mmgr *mmgr;
@@ -800,17 +803,15 @@ static int nvm_init (uint8_t start_all)
     core.run_flag |= RUN_NVME_ALLOC;
 
     /* media managers */
-    if (start_all) {
 #if MMGR_DFCNAND
-        ret = mmgr_dfcnand_init();
-        if(ret) goto OUT;
+    ret = mmgr_dfcnand_init();
+    if(ret) goto OUT;
 #endif
 #if MMGR_VOLT
-        ret = mmgr_volt_init();
-        if(ret) goto OUT;
+    ret = mmgr_volt_init();
+    if(ret) goto OUT;
 #endif
-        core.run_flag |= RUN_MMGR;
-    }
+    core.run_flag |= RUN_MMGR;
 
     /* flash translation layers */
 #if FTL_LNVMFTL
@@ -837,6 +838,7 @@ static int nvm_init (uint8_t start_all)
     core.run_flag |= RUN_NVME;
 
     core.nvm_nvme_ctrl->running = 0; /* ready */
+    core.nvm_nvme_ctrl->stop = 0;
 
     printf("OX Controller started succesfully. Log: /var/log/nvme.log\n");
 
@@ -873,7 +875,7 @@ static void nvm_clear_all (uint8_t stop_all)
     }
 
     /* Clean all media managers */
-    if ((core.run_flag & RUN_MMGR) && stop_all) {
+    if (core.run_flag & RUN_MMGR) {
         while (core.mmgr_count) {
             mmgr = LIST_FIRST(&mmgr_head);
             nvm_unregister_mmgr(mmgr);
@@ -883,6 +885,8 @@ static void nvm_clear_all (uint8_t stop_all)
 
     /* Clean Nvme */
     if((core.run_flag & RUN_NVME) && core.nvm_nvme_ctrl->num_namespaces) {
+        core.nvm_nvme_ctrl->running = 1; /* not ready */
+        usleep (100);
         nvme_exit();
         core.run_flag ^= RUN_NVME;
     }
@@ -896,8 +900,12 @@ static void nvm_clear_all (uint8_t stop_all)
 
 int nvm_restart (void)
 {
+    int ret;
     nvm_clear_all (NVM_RESTART);
-    return nvm_init (NVM_RESTART);
+    if ((ret = nvm_init (NVM_RESTART) == 0))
+        core.nvm_pcie->ops->reset();
+
+    return ret;
 }
 
 static void nvm_printerror (int error)
