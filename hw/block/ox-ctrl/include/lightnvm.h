@@ -4,14 +4,22 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define LNVM_SEC_BITS       2
+#define LNVM_PG_BITS        7
+#define LNVM_PL_BITS        1
+#define LNVM_BLK_BITS       5
+#define LNVM_LUN_BITS       2
+#define LNVM_CH_BITS        3
+#define LNVM_RSV_BITS       44
+
 #define LNVM_SECSZ          0x1000
 #define LNVM_SEC_OOBSZ      0x10
-#define LNVM_SEC_PG         4
-#define LNVM_PG_BLK         128
-#define LNVM_CH             8
-#define LNVM_LUN_CH         4
-#define LNVM_BLK_LUN        32
-#define LNVM_PLANES         2
+#define LNVM_SEC_PG         (1 << LNVM_SEC_BITS)
+#define LNVM_PG_BLK         (1 << LNVM_PG_BITS)
+#define LNVM_CH             (1 << LNVM_CH_BITS)
+#define LNVM_LUN_CH         (1 << LNVM_LUN_BITS)
+#define LNVM_BLK_LUN        (1 << LNVM_BLK_BITS)
+#define LNVM_PLANES         (1 << LNVM_PL_BITS)
 #define LNVM_PG_SIZE        (LNVM_SECSZ * LNVM_SEC_PG)
 #define LNVM_PL_PG_SIZE     (LNVM_SECSZ * LNVM_SEC_PG * LNVM_PLANES)
 #define LNVM_SEC_PL_PG      (LNVM_SEC_PG * LNVM_PLANES)

@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include "hw/block/ox-ctrl/include/uatomic.h"
 #include "hw/block/ox-ctrl/include/ox-mq.h"
+#include "hw/block/ox-ctrl/include/lightnvm.h"
 #include "qemu/osdep.h"
 #include "hw/block/block.h"
 #include "hw/pci/msix.h"
@@ -80,12 +81,13 @@ struct nvm_ppa_addr {
     /* Generic structure for all addresses */
     union {
         struct {
-            uint64_t sec   : 8;
-            uint64_t pl    : 8;
-            uint64_t ch    : 8;
-            uint64_t lun   : 8;
-            uint64_t pg    : 16;
-            uint64_t blk   : 16;
+            uint64_t sec   : LNVM_SEC_BITS;
+            uint64_t pl    : LNVM_PL_BITS;
+            uint64_t ch    : LNVM_CH_BITS;
+            uint64_t lun   : LNVM_LUN_BITS;
+            uint64_t pg    : LNVM_PG_BITS;
+            uint64_t blk   : LNVM_BLK_BITS;
+            uint64_t rsv   : LNVM_RSV_BITS;
         } g;
 
         uint64_t ppa;
