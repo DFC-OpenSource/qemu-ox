@@ -77,7 +77,8 @@
 #define NVM_CH_IN_USE          0x3c
 
 #define FTL_ID_LNVM            0x1
-#define FTL_ID_STANDARD        FTL_ID_LNVM
+#define FTL_ID_APPNVM          0x2
+#define FTL_ID_STANDARD        FTL_ID_APPNVM
 
 #define log_err(format, ...)         syslog(LOG_ERR, format, ## __VA_ARGS__)
 #define log_info(format, ...)        syslog(LOG_INFO, format, ## __VA_ARGS__)
