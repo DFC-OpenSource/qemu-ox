@@ -97,7 +97,7 @@ static int nvme_init_ctrl (NvmeCtrl *n)
     id->ieee[1] = 0x02;
     id->ieee[2] = 0xb3;
     id->cmic = 0;
-    id->mdts = 8;
+    id->mdts = 8; /* 4k * (1 << 8) = 1 MB max transfer per NVMe I/O */
     id->oacs = cpu_to_le16(NVME_OACS_FORMAT);
     id->acl = 3;
     id->aerl = 3;

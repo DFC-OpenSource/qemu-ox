@@ -41,6 +41,10 @@ static void app_callback_io (struct nvm_mmgr_io_cmd *cmd)
 
 static int app_submit_io (struct nvm_io_cmd *cmd)
 {
+    cmd->status.status = NVM_IO_SUCCESS;
+    cmd->status.nvme_status = NVME_SUCCESS;
+    nvm_complete_ftl(cmd);
+
     return 0;
 }
 

@@ -325,7 +325,6 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
 
 #else
     /* For now all channels must be included in the global namespace */
-
     if ((cmd->slba > (core.nvm_ns_size / cmd->sec_sz)) ||
             (cmd->slba + (cmd->sec_sz * cmd->n_sec) > core.nvm_ns_size)) {
         syslog(LOG_INFO,"[nvm: IO out of bounds.]\n");
@@ -333,6 +332,8 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
         nvm_complete_to_host(cmd);
         return NVME_LBA_RANGE;
     }
+
+    cmd->channel[0] = core.nvm_ch[cmd->slba / (core.nvm_ns_size / core.nvm_ch_count)];
 
     multi_ch++;
 

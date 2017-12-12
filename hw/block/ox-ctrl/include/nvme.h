@@ -213,6 +213,20 @@ enum NvmeCmdDW0 {
     CMD_DW0_PSDT2   = (1 << 7)
 };
 
+enum NvmeCmdFuse {
+    CMD_FUSE_NO     = 0x0,
+    CMD_FUSE_1      = 0x1,
+    CMD_FUSE_2      = 0x2,
+    CMD_FUSE_RSV    = 0x3
+};
+
+enum NvmeCmdPsdt {
+    CMD_PSDT_PRP    = 0x0,
+    CMD_PSDT_SGL    = 0x1,
+    CMD_PSDT_SGL_MD = 0x2,
+    CMD_PSDT_RSV    = 0x3
+};
+
 #define NVME_CC_EN(cc)     ((cc >> CC_EN_SHIFT)     & CC_EN_MASK)
 #define NVME_CC_CSS(cc)    ((cc >> CC_CSS_SHIFT)    & CC_CSS_MASK)
 #define NVME_CC_MPS(cc)    ((cc >> CC_MPS_SHIFT)    & CC_MPS_MASK)
@@ -453,7 +467,9 @@ enum NvmeIoCommands {
 
 typedef struct NvmeCmd {
     uint8_t     opcode;
-    uint8_t     fuse;
+    uint8_t     fuse : 2;
+    uint8_t     rsvd : 4;
+    uint8_t     psdt : 2;
     uint16_t    cid;
     uint32_t    nsid;
     uint64_t    res1;
@@ -466,7 +482,7 @@ typedef struct NvmeCmd {
     uint32_t    cdw13;
     uint32_t    cdw14;
     uint32_t    cdw15;
-} NvmeCmd;
+} __attribute__((packed)) NvmeCmd;
 
 typedef struct NvmeIdentify {
     uint8_t     opcode;
@@ -522,7 +538,9 @@ typedef struct NvmeCreateCq {
 
 typedef struct NvmeRwCmd {
     uint8_t     opcode;
-    uint8_t     flags;
+    uint8_t     fuse : 2;
+    uint8_t     rsvd : 4;
+    uint8_t     psdt : 2;
     uint16_t    cid;
     uint32_t    nsid;
     uint64_t    rsvd2;
@@ -536,7 +554,7 @@ typedef struct NvmeRwCmd {
     uint32_t    reftag;
     uint16_t    apptag;
     uint16_t    appmask;
-} NvmeRwCmd;
+} __attribute__((packed)) NvmeRwCmd;
 
 typedef struct vs_reg {
     uint8_t rsvd;

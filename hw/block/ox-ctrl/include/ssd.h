@@ -158,8 +158,8 @@ struct nvm_io_cmd {
     struct nvm_mmgr_io_cmd      mmgr_io[64];
     void                        *req;
     void                        *mq_req;
-    uint64_t                    prp[64];
-    uint64_t                    md_prp[64];
+    uint64_t                    prp[256]; /* maximum 1 MB for block I/O */
+    uint64_t                    md_prp[256];
     uint32_t                    sec_sz;
     uint32_t                    md_sz;
     uint32_t                    n_sec;
