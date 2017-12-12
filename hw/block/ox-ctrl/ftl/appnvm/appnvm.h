@@ -16,8 +16,11 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 
 #define APP_IO_RETRY       0
-#define APP_RSV_BLK        1
-#define APP_RSV_BLK_COUNT  1
+
+#define APP_RSV_BBT        1
+#define APP_RSV_L2P        2
+#define APP_RSV_BLK_COUNT  2
+
 #define APP_MAGIC          0x3c
 
 enum {
@@ -38,6 +41,11 @@ enum app_bbt_state {
 #define APP_BBT_FULL        0x2 // Checks for bad blocks erasing the block,
                                  //   writing and reading all pages,
                                  //   and comparing the buffers
+
+struct app_l2p_entry {
+    uint64_t laddr;
+    uint64_t paddr;
+};
 
 struct app_page {
 

@@ -270,7 +270,7 @@ struct nvm_pcie {
     const char                  *name;
     void                        *ctrl;            /* pci specific structure */
     union NvmeRegs              *nvme_regs;
-    struct nvm_pcie_ops          *ops;
+    struct nvm_pcie_ops         *ops;
     struct nvm_memory_region    *host_io_mem;     /* host BAR */
     pthread_t                   io_thread;        /* single thread for now */
     uint32_t                    *io_dbstride_ptr; /* for queue scheduling */
