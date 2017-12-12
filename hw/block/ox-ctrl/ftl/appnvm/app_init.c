@@ -19,14 +19,14 @@
 #include <sys/queue.h>
 #include "appnvm.h"
 
-LIST_HEAD(app_ch, app_channel) ch_head = LIST_HEAD_INITIALIZER(ch_head);
+LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
 
 static int app_submit_io (struct nvm_io_cmd *);
 
 static struct app_channel *app_get_ch_instance(uint16_t ch_id)
 {
     struct app_channel *lch;
-    LIST_FOREACH(lch, &ch_head, entry){
+    LIST_FOREACH(lch, &app_ch_head, entry){
         if(lch->ch->ch_mmgr_id == ch_id)
             return lch;
     }
@@ -98,12 +98,12 @@ static void app_exit (struct nvm_ftl *ftl)
 {
     struct app_channel *lch;
 
-    LIST_FOREACH(lch, &ch_head, entry){
+    LIST_FOREACH(lch, &app_ch_head, entry){
         free(lch->bbtbl->tbl);
         free(lch->bbtbl);
     }
-    while (!LIST_EMPTY(&ch_head)) {
-        lch = LIST_FIRST(&ch_head);
+    while (!LIST_EMPTY(&app_ch_head)) {
+        lch = LIST_FIRST(&app_ch_head);
         LIST_REMOVE (lch, entry);
         free(lch);
     }
@@ -119,16 +119,16 @@ struct nvm_ftl_ops app_ops = {
 };
 
 struct nvm_ftl app = {
-    .ftl_id         = FTL_ID_APP,
+    .ftl_id         = FTL_ID_APPNVM,
     .name           = "APPNVM",
     .nq             = 8,
     .ops            = &app_ops,
     .cap            = ZERO_32FLAG,
 };
 
-int app_init (void)
+int ftl_appnvm_init (void)
 {
-    LIST_INIT(&ch_head);
+    LIST_INIT(&app_ch_head);
     app.cap |= 1 << FTL_CAP_GET_BBTBL;
     app.cap |= 1 << FTL_CAP_SET_BBTBL;
     app.bbtbl_format = FTL_BBTBL_BYTE;

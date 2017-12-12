@@ -16,11 +16,14 @@
 #define __USE_GNU
 #endif
 
-#define LIGHTNVM            1
+#define LIGHTNVM            0
 #define INIT_DFC            1
+
 #define MMGR_DFCNAND        0
 #define MMGR_VOLT           1
-#define FTL_LNVMFTL         1
+
+#define FTL_LNVMFTL         0
+#define FTL_APPNVM          1
 
 #include <sys/queue.h>
 #include <stdint.h>
@@ -449,6 +452,7 @@ int mmgr_volt_init(void);
 
 /* FTLs init function */
 int ftl_lnvm_init(void);
+int ftl_appnvm_init(void);
 
 /* nvme functions */
 int  nvme_init(struct NvmeCtrl *);

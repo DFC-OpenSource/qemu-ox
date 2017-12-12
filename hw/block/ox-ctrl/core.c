@@ -265,10 +265,15 @@ void nvm_callback (struct nvm_mmgr_io_cmd *cmd)
 int nvm_submit_ftl (struct nvm_io_cmd *cmd)
 {
     struct nvm_ftl *ftl;
-    int ret, retry, i, qid;
-    uint8_t ch_ppa[core.nvm_ch_count];
+    int ret, retry, qid;
+
     uint8_t multi_ch = 0;
     NvmeRequest *req = (NvmeRequest *) cmd->req;
+
+#if LIGHTNVM
+    int i;
+    uint8_t ch_ppa[core.nvm_ch_count];
+#endif /* LIGHTNVM */
 
     cmd->status.nvme_status = NVME_SUCCESS;
 
@@ -320,17 +325,18 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
 
 #else
     /* For now all channels must be included in the global namespace */
-    for (i = 0; i < core.nvm_ch_count; i++) {
-        if (cmd->slba >= core.nvm_ch[i]->slba && cmd->slba <=
-                                                        core.nvm_ch[i]->elba) {
-            ch = core.nvm_ch[i];
-            break;
-        }
-        syslog(LOG_INFO,"[nvm ERROR: IO failed, channel not found.]\n");
-        req->status = NVME_CMD_ABORT_REQ;
+
+    if ((cmd->slba > (core.nvm_ns_size / cmd->sec_sz)) ||
+            (cmd->slba + (cmd->sec_sz * cmd->n_sec) > core.nvm_ns_size)) {
+        syslog(LOG_INFO,"[nvm: IO out of bounds.]\n");
+        req->status = NVME_LBA_RANGE;
         nvm_complete_to_host(cmd);
-        return NVME_CMD_ABORT_REQ;
+        return NVME_LBA_RANGE;
     }
+
+    multi_ch++;
+
+    ftl = nvm_get_ftl_instance(FTL_ID_STANDARD);
 #endif /* LIGHTNVM */
 
     cmd->status.status = NVM_IO_PROCESS;
@@ -345,14 +351,17 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
         else if (core.debug) {
             printf(" CMD cid: %lu, type: 0x%x submitted to FTL. "
                                "FTL queue: %d\n", cmd->cid, cmd->cmdtype, qid);
+#if LIGHTNVM
             for (i = 0; i < core.nvm_ch_count; i++)
                 if (ch_ppa[i] > 0)
                     printf("  Channel: %d, PPAs: %d\n", i, ch_ppa[i]);
+#endif /* LIGHTNVM */
         }
     } while (ret && retry);
 
     return (retry) ? NVME_NO_COMPLETE : NVME_CMD_ABORT_REQ;
 
+#if LIGHTNVM
 CH_ERR:
     syslog(LOG_INFO,"[nvm ERROR: IO failed, channel not found.]\n");
     req->status = NVME_CMD_ABORT_REQ;
@@ -364,6 +373,7 @@ FTL_ERR:
     req->status = NVME_INVALID_FIELD;
     nvm_complete_to_host(cmd);
     return NVME_INVALID_FIELD;
+#endif /* LIGHTNVM */
 }
 
 int nvm_dma (void *ptr, uint64_t prp, ssize_t size, uint8_t direction)
@@ -816,6 +826,10 @@ static int nvm_init (uint8_t start_all)
     /* flash translation layers */
 #if FTL_LNVMFTL
     ret = ftl_lnvm_init();
+    if(ret) goto OUT;
+#endif
+#if FTL_APPNVM
+    ret = ftl_appnvm_init();
     if(ret) goto OUT;
 #endif
     core.run_flag |= RUN_FTL;

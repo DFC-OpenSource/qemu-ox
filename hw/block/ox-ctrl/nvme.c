@@ -9,6 +9,7 @@
 #include <string.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 #include "hw/block/ox-ctrl/include/nvme.h"
+#include "hw/block/ox-ctrl/include/ox-ndp.h"
 #include <hw/pci/pci.h>
 
 #if LIGHTNVM
