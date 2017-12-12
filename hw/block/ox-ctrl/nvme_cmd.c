@@ -12,19 +12,22 @@
 extern struct core_struct core;
 
 static void nvme_debug_print_io (NvmeRwCmd *cmd, uint32_t bs, uint64_t dt_sz,
-        uint64_t md_sz, uint64_t elba)
+        uint64_t md_sz, uint64_t elba, uint64_t *prp)
 {
+    int i;
     char buf[4096];
 
     setbuffer (stdout, buf, 4096);
 
     printf("  fuse: %d, psdt: %d\n", cmd->fuse, cmd->psdt);
-    printf("  number of LBAs: %d, bs: %d\n", cmd->nlb, bs);
+    printf("  number of LBAs: %d, bs: %d\n", cmd->nlb + 1, bs);
     printf("  DMA size: %lu (data) + %lu (meta) = %lu bytes\n",
                                                  dt_sz, md_sz, dt_sz + md_sz);
     printf("  starting LBA: %lu, ending LBA: %lu\n", cmd->slba, elba);
-    printf("  prp1: 0x%016lx, prp2: 0x%016lx\n", cmd->prp1, cmd->prp2);
     printf("  meta_prp: 0x%016lx\n", cmd->mptr);
+
+    for (i = 0; i < cmd->nlb + 1; i++)
+        printf("  [prp(%d): 0x%016lx\n", i, prp[i]);
 
     fflush (stdout);
     setlinebuf (stdout);
@@ -731,7 +734,7 @@ uint16_t nvme_rw (NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     if (core.debug)
         nvme_debug_print_io (rw, req->nvm_io.sec_sz, data_size,
-                                                      req->nvm_io.md_sz, elba);
+                                     req->nvm_io.md_sz, elba, req->nvm_io.prp);
 
     return nvm_submit_ftl(&req->nvm_io);
 }
