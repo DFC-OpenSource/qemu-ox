@@ -60,16 +60,23 @@ struct app_bbtbl {
     uint8_t  *tbl;
 };
 
+struct app_blk_md_entry {
+    uint32_t    erase_count;
+    uint32_t    current_pg;
+    uint8_t     pg_state[64]; /* maximum of 512 pages per blk */
+} __attribute__((packed)) ;   /* 72 bytes per entry */
+
 struct app_blk_md {
     uint8_t  magic;
-    uint32_t md_sz;
-    /* This struct is stored on NVM up to this point, *data is not stored */
-    uint8_t  *data;
+    uint32_t entries;
+    /* This struct is stored on NVM up to this point, *tbl is not stored */
+    uint8_t  *tbl;
 };
 
 struct app_channel {
     struct nvm_channel      *ch;
     struct app_bbtbl        *bbtbl;
+    struct app_blk_md       *blk_md;
     uint16_t                bbt_blk;  /* Rsvd blk ID for bad block table */
     uint16_t                meta_blk; /* Rsvd blk ID for block metadata */
     uint16_t                l2p_blk;  /* Rsvd blk ID for l2p metadata */

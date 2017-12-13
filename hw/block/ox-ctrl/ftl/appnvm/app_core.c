@@ -167,7 +167,45 @@ FREE_BBTBL:
 
 static int app_init_blk_md (struct app_channel *lch)
 {
+    int ret = -1;
+    uint32_t tblks;
+    struct app_blk_md *md;
+    struct nvm_channel *ch = lch->ch;
+    int n_pl = ch->geometry->n_of_planes;
+
+    tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch * n_pl;
+
+    lch->blk_md = malloc (sizeof(struct app_blk_md));
+    if (!lch->blk_md)
+        return -1;
+
+    md = lch->blk_md;
+    md->tbl = malloc (sizeof(struct app_blk_md_entry) * tblks);
+    if (!md->tbl)
+        goto FREE_MD;
+
+    memset (md->tbl, 0, tblks);
+    md->magic = 0;
+    md->entries = tblks;
+
+    ret = appnvm()->md.load_fn (lch, md);
+    if (ret) goto ERR;
+
+    /* create and flush block metadata table if it does not exist */
+    if (md->magic == APP_MAGIC) {
+        ret = appnvm()->md.create_fn (lch, md);
+        if (ret) goto ERR;
+        ret = appnvm()->md.flush_fn (lch, md);
+        if (ret) goto ERR;
+    }
+
     return 0;
+
+ERR:
+    free(lch->blk_md->tbl);
+FREE_MD:
+    free(lch->blk_md);
+    return -1;
 }
 
 static int app_init_channel (struct nvm_channel *ch)
