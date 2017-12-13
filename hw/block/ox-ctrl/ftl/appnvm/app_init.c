@@ -19,9 +19,15 @@
 #include <sys/queue.h>
 #include "appnvm.h"
 
+struct app_global __appnvm;
+
 LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
 
 static int app_submit_io (struct nvm_io_cmd *);
+
+struct app_global *appnvm (void) {
+    return &__appnvm;
+}
 
 static struct app_channel *app_get_ch_instance(uint16_t ch_id)
 {
@@ -85,6 +91,10 @@ static int app_init_channel (struct nvm_channel *ch)
 
     lch->ch = ch;
 
+    /* Set reserved blocks */
+    lch->bbt_blk = ch->mmgr_rsv;
+    lch->l2p_blk = ch->mmgr_rsv + 1;
+
     ret = EMEM;
     lch->bbtbl = malloc (sizeof(struct app_bbtbl));
     if (!lch->bbtbl)
@@ -99,17 +109,15 @@ static int app_init_channel (struct nvm_channel *ch)
     bbt->magic = 0;
     bbt->bb_sz = tblks;
 
-    ret = app_get_bbt_nvm(lch, bbt);
+    ret = appnvm()->bbt.load_fn (lch, bbt);
     if (ret) goto ERR;
 
     /* create and flush bad block table if it does not exist */
     /* this procedure will erase the entire device (only in test mode) */
     if (bbt->magic == APP_MAGIC) {
-        printf(" [appnvm: Channel %d. Creating bad block table...]", ch->ch_id);
-        fflush(stdout);
-        ret = app_bbt_create (lch, bbt, APP_BBT_EMERGENCY);
+        ret = appnvm()->bbt.create_fn (lch, bbt, APP_BBT_FULL);
         if (ret) goto ERR;
-        ret = app_flush_bbt (lch, bbt);
+        ret = appnvm()->bbt.flush_fn (lch, bbt);
         if (ret) goto ERR;
     }
 
@@ -167,7 +175,7 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
     lch->bbtbl->tbl[l_addr + (ppa->g.blk * n_pl + ppa->g.pl)] = value;
 
     if (flush) {
-        ret = app_flush_bbt (lch, lch->bbtbl);
+        ret = appnvm()->bbt.flush_fn(lch, lch->bbtbl);
         if (ret)
             log_info("[ftl WARNING: Error flushing bad block table to NVM!]");
     }
@@ -199,7 +207,7 @@ struct nvm_ftl_ops app_ops = {
     .set_bbtbl   = app_ftl_set_bbtbl,
 };
 
-struct nvm_ftl app = {
+struct nvm_ftl app_ftl = {
     .ftl_id         = FTL_ID_APPNVM,
     .name           = "APPNVM",
     .nq             = 8,
@@ -209,9 +217,12 @@ struct nvm_ftl app = {
 
 int ftl_appnvm_init (void)
 {
+    /* AppNVM initialization */
+    bbt_byte_register ();
+
     LIST_INIT(&app_ch_head);
-    app.cap |= 1 << FTL_CAP_GET_BBTBL;
-    app.cap |= 1 << FTL_CAP_SET_BBTBL;
-    app.bbtbl_format = FTL_BBTBL_BYTE;
-    return nvm_register_ftl(&app);
+    app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
+    app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;
+    app_ftl.bbtbl_format = FTL_BBTBL_BYTE;
+    return nvm_register_ftl(&app_ftl);
 }

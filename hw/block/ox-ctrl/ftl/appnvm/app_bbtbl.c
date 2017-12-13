@@ -15,13 +15,12 @@
 #include <string.h>
 #include "appnvm.h"
 
-extern struct core_struct core;
-
 /* Erases the entire channel, failed erase marks the block as bad
  * bbt -> bad block table pointer to be filled up
  * bbt_sz -> pointer to integer, function will set it up
  * ch  -> channel to be checked
  */
+
 static struct nvm_ppa_addr *app_check_ch_bb (struct nvm_ppa_addr *bbt,
                       uint16_t *bbt_sz,  struct nvm_channel *ch, uint8_t type)
 {
@@ -139,18 +138,19 @@ MARK_BLK:
     return bbt;
 }
 
-static int app_io_rsv_blk (struct nvm_channel *ch, uint8_t cmdtype,
+static int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                                    void **buf_vec, uint16_t pg)
 {
     int pl, ret = -1;
     void *buf = NULL;
+    struct nvm_channel *ch = lch->ch;
     struct nvm_mmgr_io_cmd *cmd = malloc(sizeof(struct nvm_mmgr_io_cmd));
     if (!cmd)
         return EMEM;
 
     for (pl = 0; pl < ch->geometry->n_of_planes; pl++) {
         memset (cmd, 0, sizeof (struct nvm_mmgr_io_cmd));
-        cmd->ppa.g.blk = APP_RSV_BBT;
+        cmd->ppa.g.blk = lch->bbt_blk;
         cmd->ppa.g.pl = pl;
         cmd->ppa.g.ch = ch->ch_mmgr_id;
         cmd->ppa.g.lun = 0;
@@ -179,7 +179,7 @@ static uint16_t app_count_bb (struct app_channel *lch)
     return bb;
 }
 
-int app_flush_bbt (struct app_channel *lch, struct app_bbtbl *bbt)
+static int bbt_byte_flush (struct app_channel *lch, struct app_bbtbl *bbt)
 {
     int ret, pg, i;
     struct app_bbtbl nvm_bbt;
@@ -207,7 +207,7 @@ int app_flush_bbt (struct app_channel *lch, struct app_bbtbl *bbt)
     pg = 0;
     do {
         memset (buf, 0, buf_sz * n_pl);
-        ret = app_io_rsv_blk (ch, MMGR_READ_PG, buf_vec, pg);
+        ret = app_io_rsv_blk (lch, MMGR_READ_PG, buf_vec, pg);
 
         /* get info from OOB area (64 bytes) in plane 0 */
         memcpy(&nvm_bbt, buf + pg_sz, sizeof(struct app_bbtbl));
@@ -222,7 +222,7 @@ int app_flush_bbt (struct app_channel *lch, struct app_bbtbl *bbt)
         goto OUT;
 
     if (pg == ch->geometry->pg_per_blk) {
-        if (app_io_rsv_blk (ch, MMGR_ERASE_BLK, NULL, 0))
+        if (app_io_rsv_blk (lch, MMGR_ERASE_BLK, NULL, 0))
             goto OUT;
         pg = 0;
     }
@@ -237,14 +237,14 @@ int app_flush_bbt (struct app_channel *lch, struct app_bbtbl *bbt)
     /* set bad block table */
     memcpy (buf, bbt->tbl, bbt->bb_sz);
 
-    ret = app_io_rsv_blk (ch, MMGR_WRITE_PG, buf_vec, pg);
+    ret = app_io_rsv_blk (lch, MMGR_WRITE_PG, buf_vec, pg);
 
 OUT:
     free(buf);
     return ret;
 }
 
-int app_bbt_create (struct app_channel *lch, struct app_bbtbl *bbt,
+static int bbt_byte_create (struct app_channel *lch, struct app_bbtbl *bbt,
                                                                  uint8_t type)
 {
     int i, rsv, l_addr, b_addr, pl_addr, n_pl;
@@ -275,6 +275,9 @@ int app_bbt_create (struct app_channel *lch, struct app_bbtbl *bbt,
         bbt->tbl[l_addr + b_addr + pl_addr] = NVM_BBT_DMRK;
     }
 
+    printf(" [appnvm: Channel %d. Creating bad block table...]", ch->ch_id);
+    fflush(stdout);
+
     if (type == APP_BBT_FULL || type == APP_BBT_ERASE) {
         /* Check for bad blocks in the whole channel */
         bbt_tmp = app_check_ch_bb (bbt_tmp, &bb_count, ch, type);
@@ -288,6 +291,8 @@ int app_bbt_create (struct app_channel *lch, struct app_bbtbl *bbt,
                                                                      ch->ch_id);
     }
 
+    printf("\n");
+
     lch->bbtbl->bb_count = bb_count;
 
     for (i = 0; i < bb_count; i++) {
@@ -300,7 +305,7 @@ int app_bbt_create (struct app_channel *lch, struct app_bbtbl *bbt,
     return 0;
 }
 
-int app_get_bbt_nvm (struct app_channel *lch, struct app_bbtbl *bbt)
+static int bbt_byte_load (struct app_channel *lch, struct app_bbtbl *bbt)
 {
     int ret, pg, i;
     struct app_bbtbl nvm_bbt;
@@ -328,7 +333,7 @@ int app_get_bbt_nvm (struct app_channel *lch, struct app_bbtbl *bbt)
     pg = 0;
     do {
         memset (buf, 0, buf_sz * n_pl);
-        ret = app_io_rsv_blk (ch, MMGR_READ_PG, (void **) buf_vec, pg);
+        ret = app_io_rsv_blk (lch, MMGR_READ_PG, (void **) buf_vec, pg);
 
         /* get info from OOB area (64 bytes) in plane 0 */
         memcpy(&nvm_bbt, buf + pg_sz, sizeof(struct app_bbtbl));
@@ -346,7 +351,7 @@ int app_get_bbt_nvm (struct app_channel *lch, struct app_bbtbl *bbt)
         goto OUT;
 
     if (!pg) {
-        ret = app_io_rsv_blk (ch, MMGR_ERASE_BLK, NULL, 0);
+        ret = app_io_rsv_blk (lch, MMGR_ERASE_BLK, NULL, 0);
 
         /* tells the caller that the block is new and must be written */
         bbt->magic = APP_MAGIC;
@@ -359,4 +364,10 @@ int app_get_bbt_nvm (struct app_channel *lch, struct app_bbtbl *bbt)
 OUT:
     free(buf);
     return ret;
+}
+
+void bbt_byte_register (void) {
+    appnvm()->bbt.create_fn = bbt_byte_create;
+    appnvm()->bbt.flush_fn = bbt_byte_flush;
+    appnvm()->bbt.load_fn = bbt_byte_load;
 }

@@ -17,8 +17,6 @@
 
 #define APP_IO_RETRY       0
 
-#define APP_RSV_BBT        1
-#define APP_RSV_L2P        2
 #define APP_RSV_BLK_COUNT  2
 
 #define APP_MAGIC          0x3c
@@ -60,13 +58,28 @@ struct app_bbtbl {
 };
 
 struct app_channel {
-    struct nvm_channel       *ch;
+    struct nvm_channel      *ch;
     struct app_bbtbl        *bbtbl;
+    uint16_t                bbt_blk;
+    uint16_t                l2p_blk;
     LIST_ENTRY(app_channel) entry;
 };
 
-int app_get_bbt_nvm (struct app_channel *, struct app_bbtbl *);
-int app_bbt_create (struct app_channel *, struct app_bbtbl *, uint8_t);
-int app_flush_bbt (struct app_channel *, struct app_bbtbl *);
+typedef int (app_bbt_create)(struct app_channel *, struct app_bbtbl *, uint8_t);
+typedef int (app_bbt_flush) (struct app_channel *, struct app_bbtbl *);
+typedef int (app_bbt_load) (struct app_channel *, struct app_bbtbl *);
+
+struct app_global_bbt {
+    app_bbt_create      *create_fn;
+    app_bbt_flush       *flush_fn;
+    app_bbt_load        *load_fn;
+};
+
+struct app_global {
+    struct app_global_bbt bbt;
+};
+
+struct app_global *appnvm (void);
+void bbt_byte_register (void);
 
 #endif /* APP_H */
