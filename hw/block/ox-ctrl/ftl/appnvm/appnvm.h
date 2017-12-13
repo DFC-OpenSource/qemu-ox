@@ -17,7 +17,10 @@
 
 #define APP_IO_RETRY       0
 
-#define APP_RSV_BLK_COUNT  2
+#define APP_RSV_BBT_OFF    0
+#define APP_RSV_META_OFF   1
+#define APP_RSV_L2P_OFF    2
+#define APP_RSV_BLK_COUNT  APP_RSV_BBT_OFF + APP_RSV_META_OFF + APP_RSV_L2P_OFF;
 
 #define APP_MAGIC          0x3c
 
@@ -57,11 +60,19 @@ struct app_bbtbl {
     uint8_t  *tbl;
 };
 
+struct app_blk_md {
+    uint8_t  magic;
+    uint32_t md_sz;
+    /* This struct is stored on NVM up to this point, *data is not stored */
+    uint8_t  *data;
+};
+
 struct app_channel {
     struct nvm_channel      *ch;
     struct app_bbtbl        *bbtbl;
-    uint16_t                bbt_blk;
-    uint16_t                l2p_blk;
+    uint16_t                bbt_blk;  /* Rsvd blk ID for bad block table */
+    uint16_t                meta_blk; /* Rsvd blk ID for block metadata */
+    uint16_t                l2p_blk;  /* Rsvd blk ID for l2p metadata */
     LIST_ENTRY(app_channel) entry;
 };
 
@@ -69,17 +80,32 @@ typedef int (app_bbt_create)(struct app_channel *, struct app_bbtbl *, uint8_t);
 typedef int (app_bbt_flush) (struct app_channel *, struct app_bbtbl *);
 typedef int (app_bbt_load) (struct app_channel *, struct app_bbtbl *);
 
+typedef int (app_md_create)(struct app_channel *, struct app_blk_md *);
+typedef int (app_md_flush) (struct app_channel *, struct app_blk_md *);
+typedef int (app_md_load) (struct app_channel *, struct app_blk_md *);
+
 struct app_global_bbt {
     app_bbt_create      *create_fn;
     app_bbt_flush       *flush_fn;
     app_bbt_load        *load_fn;
 };
 
-struct app_global {
-    struct app_global_bbt bbt;
+struct app_global_md {
+    app_md_create      *create_fn;
+    app_md_flush       *flush_fn;
+    app_md_load        *load_fn;
 };
+
+struct app_global {
+    struct app_global_bbt   bbt;
+    struct app_global_md    md;
+};
+
+int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
+                                     void **buf_vec, uint16_t blk, uint16_t pg);
 
 struct app_global *appnvm (void);
 void bbt_byte_register (void);
+void blk_md_register (void);
 
 #endif /* APP_H */
