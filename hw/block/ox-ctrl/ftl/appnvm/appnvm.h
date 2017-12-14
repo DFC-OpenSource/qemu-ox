@@ -24,6 +24,9 @@
 
 #define APP_MAGIC          0x3c
 
+#define APP_TRANS_TO_NVM    0
+#define APP_TRANS_FROM_NVM  1
+
 enum {
     FTL_PGMAP_OFF   = 0,
     FTL_PGMAP_ON    = 1
@@ -48,9 +51,9 @@ struct app_l2p_entry {
     uint64_t paddr;
 };
 
-struct app_page {
-
-};
+struct app_magic {
+    uint8_t magic;
+} __attribute__((packed)) ;
 
 struct app_bbtbl {
     uint8_t  magic;
@@ -60,11 +63,27 @@ struct app_bbtbl {
     uint8_t  *tbl;
 };
 
+struct app_io_data {
+    struct app_channel *lch;
+    struct nvm_channel *ch;
+    uint8_t             n_pl;
+    uint32_t            pg_sz;
+    uint8_t             *buf;
+    uint32_t            meta_sz;
+    uint32_t            buf_sz;
+};
+
+enum app_blk_md_flags {
+    APP_BLK_MD_USED = (1 << 0)
+};
+
 struct app_blk_md_entry {
-    uint32_t    erase_count;
-    uint32_t    current_pg;
-    uint8_t     pg_state[64]; /* maximum of 512 pages per blk */
-} __attribute__((packed)) ;   /* 72 bytes per entry */
+    uint16_t                flags;
+    struct nvm_ppa_addr     ppa;
+    uint32_t                erase_count;
+    uint32_t                current_pg;
+    uint8_t                 pg_state[64]; /* maximum of 512 pages per blk */
+} __attribute__((packed)) ;   /* 82 bytes per entry */
 
 struct app_blk_md {
     uint8_t  magic;
@@ -108,8 +127,15 @@ struct app_global {
     struct app_global_md    md;
 };
 
-int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
+struct app_io_data *app_alloc_pg_io (struct app_channel *lch);
+void    app_free_pg_io (struct app_io_data *data);
+int     app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                      void **buf_vec, uint16_t blk, uint16_t pg);
+int     app_blk_current_page (struct app_channel *lch,
+                                       struct app_io_data *io, uint16_t offset);
+int     app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
+        uint16_t pgs, uint16_t start_pg,  uint16_t ent_per_pg,
+        uint32_t ent_left, size_t entry_sz, uint16_t blk_id, uint8_t direction);
 
 struct app_global *appnvm (void);
 void bbt_byte_register (void);

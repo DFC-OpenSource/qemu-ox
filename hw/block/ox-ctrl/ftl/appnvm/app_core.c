@@ -29,6 +29,149 @@ struct app_global *appnvm (void) {
     return &__appnvm;
 }
 
+struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
+{
+    struct app_io_data *data;
+
+    data = malloc (sizeof (struct app_io_data));
+    if (!data)
+        return NULL;
+
+    data->lch = lch;
+    data->ch = lch->ch;
+    data->n_pl = data->ch->geometry->n_of_planes;
+    data->pg_sz = data->ch->geometry->pg_size;
+    data->meta_sz = data->ch->geometry->sec_oob_sz *
+                                                data->ch->geometry->sec_per_pg;
+    data->buf_sz = (data->pg_sz + data->meta_sz) * data->n_pl;
+
+    data->buf = calloc(data->buf_sz, 1);
+    if (!data->buf) {
+        free (data);
+        return NULL;
+    }
+
+    return data;
+}
+
+void app_free_pg_io (struct app_io_data *data)
+{
+    free (data->buf);
+    free (data);
+}
+
+int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
+                                                               uint16_t offset)
+{
+    int i, pg, ret, fr = 0;
+    struct app_magic oob;
+
+    if (io == NULL) {
+        io = app_alloc_pg_io(lch);
+        if (io == NULL)
+            return -1;
+        fr++;
+    }
+
+    uint8_t *buf_vec[io->n_pl];
+
+    for (i = 0; i < io->n_pl; i++)
+        buf_vec[i] = io->buf + i * (io->buf_sz / io->n_pl);
+
+    /* Finds the location of the newest data by checking APP_MAGIC */
+    pg = 0;
+    do {
+        memset (io->buf, 0, io->buf_sz);
+        ret = app_io_rsv_blk (lch, MMGR_READ_PG, (void **) buf_vec,
+                                                            lch->meta_blk, pg);
+
+        /* get info from OOB area in plane 0 */
+        memcpy(&oob, io->buf + io->pg_sz, sizeof(struct app_magic));
+
+        if (ret || oob.magic != APP_MAGIC)
+            break;
+
+        pg += offset;
+    } while (pg < io->ch->geometry->pg_per_blk - offset);
+
+    if (fr)
+        app_free_pg_io (io);
+
+    return (!ret) ? pg : -1;
+}
+
+/**
+ *  Transfers a table of user specific entries to/from a NVM reserved block
+ *  This function mount/unmount the multi-plane I/O buffers to a flat table
+ *
+ *  The table can cross multiple pages in the block
+ *  For now, the maximum table size is the flash block
+ *
+ * @param io - struct created by alloc_alloc_pg_io
+ * @param user_buf - table buffer to be transfered
+ * @param pgs - number of flash pages the table crosses (multi-plane pages)
+ * @param start_pg - first page to be written
+ * @param ent_per_pg - number of entries per flash page (multi-plane pages)
+ * @param ent_left - number of entries to be transfered
+ * @param entry_sz - size of an entry
+ * @param blk_id - reserved block ID (for now, in LUN 0)
+ * @param direction - APP_TRANS_FROM_NVM or APP_TRANS_TO_NVM
+ * @return 0 on success, -1 on failure
+ */
+int app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
+        uint16_t pgs, uint16_t start_pg,  uint16_t ent_per_pg,
+        uint32_t ent_left, size_t entry_sz, uint16_t blk_id, uint8_t direction)
+{
+    int i, pl;
+    size_t trf_sz, pg_ent_sz;
+    uint8_t *from, *to;
+
+    uint8_t *buf_vec[io->n_pl];
+    for (i = 0; i < io->n_pl; i++)
+        buf_vec[i] = io->buf + i * (io->buf_sz / io->n_pl);
+
+    pg_ent_sz = ent_per_pg * entry_sz;
+
+    /* Transfer page by page from/to NVM */
+    for (i = 0; i < pgs; i++) {
+
+        if (direction == APP_TRANS_FROM_NVM)
+            if (app_io_rsv_blk (io->lch, MMGR_READ_PG, (void **) buf_vec,
+                                                        blk_id, start_pg + i))
+                return -1;
+
+        /* Copy page entries from/to I/O buffer */
+        for (pl = 0; pl < io->n_pl; pl++) {
+
+            trf_sz = (ent_left >= ent_per_pg / io->n_pl) ?
+                    (ent_per_pg / io->n_pl) * entry_sz : ent_left * entry_sz;
+
+            from = (direction == APP_TRANS_TO_NVM) ?
+                user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl)) :
+                buf_vec[pl];
+
+            to = (direction == APP_TRANS_TO_NVM) ?
+                buf_vec[pl] :
+                user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl));
+
+            memcpy(to, from, trf_sz);
+
+            ent_left = (ent_left >= ent_per_pg / io->n_pl) ?
+                ent_left - (ent_per_pg / io->n_pl) : 0;
+
+            if (!ent_left)
+                break;
+        }
+
+        if (direction == APP_TRANS_TO_NVM)
+            if (app_io_rsv_blk (io->lch, MMGR_WRITE_PG, (void **) buf_vec,
+                                                        blk_id, start_pg + i))
+                return -1;
+    }
+
+    return 0;
+}
+
 int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                      void **buf_vec, uint16_t blk, uint16_t pg)
 {
@@ -129,6 +272,7 @@ static int app_init_bbt (struct app_channel *lch)
     struct nvm_channel *ch = lch->ch;
     int n_pl = ch->geometry->n_of_planes;
 
+    /* For bad block table we consider blocks in a single plane */
     tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch * n_pl;
 
     lch->bbtbl = malloc (sizeof(struct app_bbtbl));
@@ -171,9 +315,9 @@ static int app_init_blk_md (struct app_channel *lch)
     uint32_t tblks;
     struct app_blk_md *md;
     struct nvm_channel *ch = lch->ch;
-    int n_pl = ch->geometry->n_of_planes;
 
-    tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch * n_pl;
+    /* For block metadata, we consider multi-plane blocks */
+    tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch;
 
     lch->blk_md = malloc (sizeof(struct app_blk_md));
     if (!lch->blk_md)
@@ -184,7 +328,7 @@ static int app_init_blk_md (struct app_channel *lch)
     if (!md->tbl)
         goto FREE_MD;
 
-    memset (md->tbl, 0, tblks);
+    memset (md->tbl, 0, sizeof(struct app_blk_md_entry) * tblks);
     md->magic = 0;
     md->entries = tblks;
 
