@@ -288,17 +288,19 @@ static int app_init_bbt (struct app_channel *lch)
     bbt->magic = 0;
     bbt->bb_sz = tblks;
 
-    ret = appnvm()->bbt.load_fn (lch, bbt);
+    ret = appnvm()->bbt.load_fn (lch);
     if (ret) goto ERR;
 
     /* create and flush bad block table if it does not exist */
     /* this procedure will erase the entire device (only in test mode) */
     if (bbt->magic == APP_MAGIC) {
-        ret = appnvm()->bbt.create_fn (lch, bbt, APP_BBT_EMERGENCY);
+        ret = appnvm()->bbt.create_fn (lch, APP_BBT_EMERGENCY);
         if (ret) goto ERR;
-        ret = appnvm()->bbt.flush_fn (lch, bbt);
+        ret = appnvm()->bbt.flush_fn (lch);
         if (ret) goto ERR;
     }
+
+    printf("BBT OK\n");
 
     return 0;
 
@@ -324,24 +326,27 @@ static int app_init_blk_md (struct app_channel *lch)
         return -1;
 
     md = lch->blk_md;
-    md->tbl = malloc (sizeof(struct app_blk_md_entry) * tblks);
+    md->entry_sz = sizeof(struct app_blk_md_entry);
+    md->tbl = malloc (md->entry_sz * tblks);
     if (!md->tbl)
         goto FREE_MD;
 
-    memset (md->tbl, 0, sizeof(struct app_blk_md_entry) * tblks);
+    memset (md->tbl, 0, md->entry_sz * tblks);
     md->magic = 0;
     md->entries = tblks;
 
-    ret = appnvm()->md.load_fn (lch, md);
+    ret = appnvm()->md.load_fn (lch);
     if (ret) goto ERR;
 
     /* create and flush block metadata table if it does not exist */
     if (md->magic == APP_MAGIC) {
-        ret = appnvm()->md.create_fn (lch, md);
+        ret = appnvm()->md.create_fn (lch);
         if (ret) goto ERR;
-        ret = appnvm()->md.flush_fn (lch, md);
+        ret = appnvm()->md.flush_fn (lch);
         if (ret) goto ERR;
     }
+
+     printf("BLK MD OK\n");
 
     return 0;
 
@@ -370,6 +375,11 @@ static int app_init_channel (struct nvm_channel *ch)
 
     if (app_init_blk_md (lch))
         goto FREE_LCH;
+
+    if (appnvm()->ch_prov.init_fn (lch))
+        goto FREE_LCH;
+
+     printf("PROV OK\n");
 
     LIST_INSERT_HEAD(&app_ch_head, lch, entry);
     log_info("    [appnvm: channel %d started with %d bad blocks.]\n",ch->ch_id,
@@ -420,7 +430,7 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
     lch->bbtbl->tbl[l_addr + (ppa->g.blk * n_pl + ppa->g.pl)] = value;
 
     if (flush) {
-        ret = appnvm()->bbt.flush_fn(lch, lch->bbtbl);
+        ret = appnvm()->bbt.flush_fn(lch);
         if (ret)
             log_info("[ftl WARNING: Error flushing bad block table to NVM!]");
     }
@@ -433,6 +443,9 @@ static void app_exit (struct nvm_ftl *ftl)
     struct app_channel *lch;
 
     LIST_FOREACH(lch, &app_ch_head, entry){
+        appnvm()->ch_prov.exit_fn (lch);
+        free(lch->blk_md->tbl);
+        free(lch->blk_md);
         free(lch->bbtbl->tbl);
         free(lch->bbtbl);
     }
@@ -465,6 +478,7 @@ int ftl_appnvm_init (void)
     /* AppNVM initialization */
     bbt_byte_register ();
     blk_md_register ();
+    blk_ch_prov_register ();
 
     LIST_INIT(&app_ch_head);
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;

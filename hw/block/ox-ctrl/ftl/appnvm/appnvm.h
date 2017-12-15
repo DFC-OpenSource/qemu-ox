@@ -74,7 +74,8 @@ struct app_io_data {
 };
 
 enum app_blk_md_flags {
-    APP_BLK_MD_USED = (1 << 0)
+    APP_BLK_MD_USED = (1 << 0),
+    APP_BLK_MD_OPEN = (1 << 1)
 };
 
 struct app_blk_md_entry {
@@ -88,6 +89,7 @@ struct app_blk_md_entry {
 struct app_blk_md {
     uint8_t  magic;
     uint32_t entries;
+    size_t   entry_sz;
     /* This struct is stored on NVM up to this point, *tbl is not stored */
     uint8_t  *tbl;
 };
@@ -96,35 +98,54 @@ struct app_channel {
     struct nvm_channel      *ch;
     struct app_bbtbl        *bbtbl;
     struct app_blk_md       *blk_md;
+    void                    *ch_prov;
     uint16_t                bbt_blk;  /* Rsvd blk ID for bad block table */
     uint16_t                meta_blk; /* Rsvd blk ID for block metadata */
     uint16_t                l2p_blk;  /* Rsvd blk ID for l2p metadata */
     LIST_ENTRY(app_channel) entry;
 };
 
-typedef int (app_bbt_create)(struct app_channel *, struct app_bbtbl *, uint8_t);
-typedef int (app_bbt_flush) (struct app_channel *, struct app_bbtbl *);
-typedef int (app_bbt_load) (struct app_channel *, struct app_bbtbl *);
+typedef int (app_bbt_create)(struct app_channel *, uint8_t);
+typedef int (app_bbt_flush) (struct app_channel *);
+typedef int (app_bbt_load) (struct app_channel *);
+typedef uint8_t *(app_bbt_get) (struct app_channel *, uint16_t);
 
-typedef int (app_md_create)(struct app_channel *, struct app_blk_md *);
-typedef int (app_md_flush) (struct app_channel *, struct app_blk_md *);
-typedef int (app_md_load) (struct app_channel *, struct app_blk_md *);
+typedef int (app_md_create)(struct app_channel *);
+typedef int (app_md_flush) (struct app_channel *);
+typedef int (app_md_load) (struct app_channel *);
+typedef struct app_blk_md_entry *(app_md_get) (struct app_channel *, uint16_t);
+
+typedef int  (app_ch_prov_init) (struct app_channel *);
+typedef void (app_ch_prov_exit) (struct app_channel *);
+typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
+typedef struct nvm_ppa_addr *(app_ch_prov_get_ppas) (struct app_channel *,
+                                                                     uint16_t);
 
 struct app_global_bbt {
     app_bbt_create      *create_fn;
     app_bbt_flush       *flush_fn;
     app_bbt_load        *load_fn;
+    app_bbt_get         *get_fn;
 };
 
 struct app_global_md {
     app_md_create      *create_fn;
     app_md_flush       *flush_fn;
     app_md_load        *load_fn;
+    app_md_get         *get_fn;
+};
+
+struct app_ch_prov {
+    app_ch_prov_init        *init_fn;
+    app_ch_prov_exit        *exit_fn;
+    app_ch_prov_put_blk     *put_blk_fn;
+    app_ch_prov_get_ppas    *get_ppas_fn;
 };
 
 struct app_global {
     struct app_global_bbt   bbt;
     struct app_global_md    md;
+    struct app_ch_prov      ch_prov;
 };
 
 struct app_io_data *app_alloc_pg_io (struct app_channel *lch);
@@ -140,5 +161,6 @@ int     app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
 struct app_global *appnvm (void);
 void bbt_byte_register (void);
 void blk_md_register (void);
+void blk_ch_prov_register (void);
 
 #endif /* APP_H */

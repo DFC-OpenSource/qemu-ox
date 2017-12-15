@@ -149,11 +149,12 @@ static uint16_t app_count_bb (struct app_channel *lch)
     return bb;
 }
 
-static int bbt_byte_flush (struct app_channel *lch, struct app_bbtbl *bbt)
+static int bbt_byte_flush (struct app_channel *lch)
 {
     int ret, pg, i;
     struct app_bbtbl nvm_bbt;
     struct nvm_channel *ch = lch->ch;
+    struct app_bbtbl *bbt = lch->bbtbl;
     uint8_t n_pl = ch->geometry->n_of_planes;
     uint32_t pg_sz = ch->geometry->pg_size;
     uint8_t *buf;
@@ -214,13 +215,13 @@ OUT:
     return ret;
 }
 
-static int bbt_byte_create (struct app_channel *lch, struct app_bbtbl *bbt,
-                                                                 uint8_t type)
+static int bbt_byte_create (struct app_channel *lch, uint8_t type)
 {
     int i, rsv, l_addr, b_addr, pl_addr, n_pl;
     struct nvm_ppa_addr *bbt_tmp;
     uint16_t bb_count = 0;
     struct nvm_channel *ch = lch->ch;
+    struct app_bbtbl *bbt = lch->bbtbl;
 
     n_pl = ch->geometry->n_of_planes;
     bbt_tmp = malloc (sizeof(struct nvm_ppa_addr));
@@ -275,11 +276,12 @@ static int bbt_byte_create (struct app_channel *lch, struct app_bbtbl *bbt,
     return 0;
 }
 
-static int bbt_byte_load (struct app_channel *lch, struct app_bbtbl *bbt)
+static int bbt_byte_load (struct app_channel *lch)
 {
     int ret, pg, i;
     struct app_bbtbl nvm_bbt;
     struct nvm_channel *ch = lch->ch;
+    struct app_bbtbl *bbt = lch->bbtbl;
     uint8_t n_pl = ch->geometry->n_of_planes;
     uint32_t pg_sz = ch->geometry->pg_size;
     uint8_t *buf_vec[n_pl];
@@ -337,8 +339,21 @@ OUT:
     return ret;
 }
 
+static uint8_t *bbt_byte_get (struct app_channel *lch, uint16_t lun)
+{
+    struct app_bbtbl *bbt = lch->bbtbl;
+    size_t lun_sz = sizeof (uint8_t) * lch->ch->geometry->blk_per_lun *
+                                                lch->ch->geometry->n_of_planes;
+
+    if (!bbt->tbl)
+        return NULL;
+
+    return bbt->tbl + (lun * lun_sz);
+}
+
 void bbt_byte_register (void) {
     appnvm()->bbt.create_fn = bbt_byte_create;
     appnvm()->bbt.flush_fn = bbt_byte_flush;
     appnvm()->bbt.load_fn = bbt_byte_load;
+    appnvm()->bbt.get_fn = bbt_byte_get;
 }

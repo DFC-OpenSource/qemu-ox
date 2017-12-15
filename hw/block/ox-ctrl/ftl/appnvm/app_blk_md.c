@@ -9,16 +9,17 @@
  * This code is licensed under the GNU GPL v2 or later.
  */
 
-#include "hw/block/ox-ctrl/include/ssd.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "hw/block/ox-ctrl/include/ssd.h"
 #include "appnvm.h"
 
-static int blk_md_create (struct app_channel *lch, struct app_blk_md *md)
+static int blk_md_create (struct app_channel *lch)
 {
     int i;
     struct app_blk_md_entry *ent;
+    struct app_blk_md *md = lch->blk_md;
 
     for (i = 0; i < md->entries; i++) {
         ent = ((struct app_blk_md_entry *) md->tbl) + i;
@@ -32,9 +33,10 @@ static int blk_md_create (struct app_channel *lch, struct app_blk_md *md)
     return 0;
 }
 
-static int blk_md_load (struct app_channel *lch, struct app_blk_md *md)
+static int blk_md_load (struct app_channel *lch)
 {
     int pg;
+    struct app_blk_md *md = lch->blk_md;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -85,9 +87,10 @@ ERR:
     return -1;
 }
 
-static int blk_md_flush (struct app_channel *lch, struct app_blk_md *md)
+static int blk_md_flush (struct app_channel *lch)
 {
     int pg;
+    struct app_blk_md *md = lch->blk_md;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -135,8 +138,21 @@ ERR:
     return -1;
 }
 
+static struct app_blk_md_entry *blk_md_get (struct app_channel *lch,
+                                                                  uint16_t lun)
+{
+    struct app_blk_md *md = lch->blk_md;
+    size_t lun_sz = md->entry_sz * lch->ch->geometry->blk_per_lun;
+
+    if (!md->tbl)
+        return NULL;
+
+    return (struct app_blk_md_entry *) (md->tbl + (lun * lun_sz));
+}
+
 void blk_md_register (void) {
     appnvm()->md.create_fn = blk_md_create;
     appnvm()->md.flush_fn = blk_md_flush;
     appnvm()->md.load_fn = blk_md_load;
+    appnvm()->md.get_fn = blk_md_get;
 }
