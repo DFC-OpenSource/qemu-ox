@@ -75,7 +75,8 @@ struct app_io_data {
 
 enum app_blk_md_flags {
     APP_BLK_MD_USED = (1 << 0),
-    APP_BLK_MD_OPEN = (1 << 1)
+    APP_BLK_MD_OPEN = (1 << 1),
+    APP_BLK_MD_LINE = (1 << 2)
 };
 
 struct app_blk_md_entry {

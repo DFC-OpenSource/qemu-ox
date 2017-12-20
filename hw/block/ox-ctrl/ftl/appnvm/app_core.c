@@ -300,7 +300,7 @@ static int app_init_bbt (struct app_channel *lch)
         if (ret) goto ERR;
     }
 
-    printf("BBT OK\n");
+    log_info("    [appnvm: Bad Block Table started. Ch %d]\n", ch->ch_id);
 
     return 0;
 
@@ -346,7 +346,7 @@ static int app_init_blk_md (struct app_channel *lch)
         if (ret) goto ERR;
     }
 
-     printf("BLK MD OK\n");
+    log_info("    [appnvm: Block Metadata started. Ch %d]\n", ch->ch_id);
 
     return 0;
 
@@ -367,6 +367,8 @@ static int app_init_channel (struct nvm_channel *ch)
 
     lch->ch = ch;
 
+    LIST_INSERT_HEAD(&app_ch_head, lch, entry);
+
     if (app_reserve_blks (lch))
         goto FREE_LCH;
 
@@ -379,14 +381,12 @@ static int app_init_channel (struct nvm_channel *ch)
     if (appnvm()->ch_prov.init_fn (lch))
         goto FREE_LCH;
 
-     printf("PROV OK\n");
-
-    LIST_INSERT_HEAD(&app_ch_head, lch, entry);
     log_info("    [appnvm: channel %d started with %d bad blocks.]\n",ch->ch_id,
                                                           lch->bbtbl->bb_count);
     return 0;
 
 FREE_LCH:
+    LIST_REMOVE (lch, entry);
     free(lch);
     log_err("[appnvm ERR: Ch %d -> Not possible to read/create bad block "
                                                         "table.]\n", ch->ch_id);
