@@ -37,6 +37,8 @@
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 
+#include "hw/block/ox-ctrl/include/ssd.h"
+
 #ifdef CONFIG_SPICE
 #include <spice/enums.h>
 #endif
@@ -2445,4 +2447,24 @@ void hmp_hotpluggable_cpus(Monitor *mon, const QDict *qdict)
     }
 
     qapi_free_HotpluggableCPUList(saved);
+}
+
+extern struct core_struct core;
+void hmp_ox_debug(Monitor *mon, const QDict *qdict)
+{
+        const char *name = qdict_get_str(qdict, "on_off");
+        if (!strcmp(name, "on") || !strcmp(name, "off")) {
+                core.debug = strcmp(name, "on") ? 0 : 1;
+                monitor_printf(mon, "OX: debugging %s\n",
+                               core.debug ? "enabled" : "disabled");
+        }
+        else {
+                monitor_printf(mon, "OX: Only accepts \"on\" or \"off\". Found: %s\n",
+                               qdict_get_str(qdict, "on_off"));
+        }
+}
+
+void hmp_info_ox_debug(Monitor *mon, const QDict *qdict)
+{
+        monitor_printf(mon, "OX: debugging is %s\n", core.debug ? "on" : "off");
 }

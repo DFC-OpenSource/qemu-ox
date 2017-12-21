@@ -811,6 +811,18 @@ ETEXI
     },
 
 STEXI
+@item ox-info-debug
+Display the status of debugging in ox
+ETEXI
+
+    {
+        .name       = "ox_debug",
+       .args_type  = "",
+       .params     = "",
+       .help       = "Show the status of debugging in ox",
+       .mhandler.cmd = hmp_info_ox_debug,
+   },
+STEXI
 @item info hotpluggable-cpus
 @findex hotpluggable-cpus
 Show information about hotpluggable CPUs

@@ -135,4 +135,7 @@ void hmp_rocker_of_dpa_groups(Monitor *mon, const QDict *qdict);
 void hmp_info_dump(Monitor *mon, const QDict *qdict);
 void hmp_hotpluggable_cpus(Monitor *mon, const QDict *qdict);
 
+void hmp_ox_debug(Monitor *mon, const QDict *qdict);
+void hmp_info_ox_debug(Monitor *mon, const QDict *qdict);
+
 #endif
