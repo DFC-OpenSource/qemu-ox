@@ -663,6 +663,7 @@ static void nvm_unregister_ftl (struct nvm_ftl *ftl)
 static int nvm_ch_config (void)
 {
     int i, c = 0, ret;
+    struct nvm_ftl_cap_gl_fn app_gl;
 
     core.nvm_ch = calloc(sizeof(struct nvm_channel *), core.nvm_ch_count);
     if (nvm_memcheck(core.nvm_ch))
@@ -709,16 +710,25 @@ static int nvm_ch_config (void)
             c++;
         }
     }
+
+#if FTL_APPNVM
+    /* APPNVM Global Init */
+    app_gl.arg = NULL;
+    app_gl.ftl_id = FTL_ID_APPNVM;
+    app_gl.fn_id = 0;
+    if (nvm_ftl_cap_exec(FTL_CAP_INIT_FN, &app_gl))
+        return -1;
+#endif
     return 0;
 }
 
 static int nvm_ftl_cap_get_bbtbl (struct nvm_channel *ch,
                                           struct nvm_ftl_cap_get_bbtbl_st *arg)
 {
-    if (arg->ppa.g.ch >= core.nvm_ch_count)
+    if (arg->nblk < 1)
         return -1;
 
-    if (arg->nblk < 1)
+    if (!ch->ftl->ops->get_bbtbl)
         return -1;
 
     if (ch->ftl->bbtbl_format == arg->bb_format)
@@ -730,7 +740,7 @@ static int nvm_ftl_cap_get_bbtbl (struct nvm_channel *ch,
 static int nvm_ftl_cap_set_bbtbl (struct nvm_channel *ch,
                                           struct nvm_ftl_cap_set_bbtbl_st *arg)
 {
-    if (arg->ppa.g.ch >= core.nvm_ch_count)
+    if (!ch->ftl->ops->set_bbtbl)
         return -1;
 
     if (ch->ftl->bbtbl_format == arg->bb_format)
@@ -739,19 +749,44 @@ static int nvm_ftl_cap_set_bbtbl (struct nvm_channel *ch,
     return -1;
 }
 
+static int nvm_ftl_cap_init_fn (struct nvm_ftl *ftl,
+                                                 struct nvm_ftl_cap_gl_fn *arg)
+{
+    if (!ftl->ops->init_fn)
+        return -1;
+
+    return ftl->ops->init_fn (arg->fn_id, arg->arg);
+}
+
+static int nvm_ftl_cap_exit_fn (struct nvm_ftl *ftl,
+                                                 struct nvm_ftl_cap_gl_fn *arg)
+{
+    if (!ftl->ops->exit_fn)
+        return -1;
+
+    ftl->ops->exit_fn (arg->fn_id);
+
+    return 0;
+}
+
 int nvm_ftl_cap_exec (uint8_t cap, void *arg)
 {
     struct nvm_channel *ch;
     struct nvm_ftl_cap_set_bbtbl_st *set_bbtbl;
     struct nvm_ftl_cap_get_bbtbl_st *get_bbtbl;
+    struct nvm_ftl_cap_gl_fn        *gl_fn;
+    struct nvm_ftl                  *ftl;
+
+    if (!arg)
+        return -1;
 
     switch (cap) {
         case FTL_CAP_GET_BBTBL:
 
             get_bbtbl = (struct nvm_ftl_cap_get_bbtbl_st *) arg;
-            ch = core.nvm_ch[get_bbtbl->ppa.g.ch];
-            if (!ch->ftl->ops->get_bbtbl)
+            if (get_bbtbl->ppa.g.ch >= core.nvm_ch_count)
                 goto OUT;
+            ch = core.nvm_ch[get_bbtbl->ppa.g.ch];
             if (ch->ftl->cap & 1 << FTL_CAP_GET_BBTBL) {
                 if (nvm_ftl_cap_get_bbtbl(ch, arg))
                     goto OUT;
@@ -762,9 +797,9 @@ int nvm_ftl_cap_exec (uint8_t cap, void *arg)
         case FTL_CAP_SET_BBTBL:
 
             set_bbtbl = (struct nvm_ftl_cap_set_bbtbl_st *) arg;
-            ch = core.nvm_ch[set_bbtbl->ppa.g.ch];
-            if (!ch->ftl->ops->set_bbtbl)
+            if (set_bbtbl->ppa.g.ch >= core.nvm_ch_count)
                 goto OUT;
+            ch = core.nvm_ch[set_bbtbl->ppa.g.ch];
             if (ch->ftl->cap & 1 << FTL_CAP_SET_BBTBL) {
                 if (nvm_ftl_cap_set_bbtbl(ch, arg))
                     goto OUT;
@@ -774,8 +809,32 @@ int nvm_ftl_cap_exec (uint8_t cap, void *arg)
 
         case FTL_CAP_GET_L2PTBL:
         case FTL_CAP_SET_L2PTBL:
-        case FTL_CAP_INIT_GL_FUNCTION:
-        case FTL_CAP_EXIT_GL_FUNCTION:
+        case FTL_CAP_INIT_FN:
+
+            gl_fn = (struct nvm_ftl_cap_gl_fn *) arg;
+            ftl = nvm_get_ftl_instance(gl_fn->ftl_id);
+            if (!ftl)
+                goto OUT;
+            if (ftl->cap & 1 << FTL_CAP_INIT_FN) {
+                if (nvm_ftl_cap_init_fn(ftl, gl_fn))
+                    goto OUT;
+                return 0;
+            }
+            break;
+
+        case FTL_CAP_EXIT_FN:
+
+            gl_fn = (struct nvm_ftl_cap_gl_fn *) arg;
+            ftl = nvm_get_ftl_instance(gl_fn->ftl_id);
+            if (!ftl)
+                goto OUT;
+            if (ftl->cap & 1 << FTL_CAP_EXIT_FN) {
+                if (nvm_ftl_cap_exit_fn(ftl, gl_fn))
+                    goto OUT;
+                return 0;
+            }
+            break;
+
         default:
             goto OUT;
     }
@@ -1047,6 +1106,7 @@ int nvm_init_ctrl (int argc, char **argv, QemuOxCtrl *qemu)
             break;
         case OX_RUN_MODE:
             core.run_flag ^= RUN_TESTS;
+            goto OUT;
            // while(1) { usleep(1); } break;
             return 0;
         default:

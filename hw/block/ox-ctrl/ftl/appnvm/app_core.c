@@ -20,6 +20,7 @@
 #include "appnvm.h"
 
 struct app_global __appnvm;
+static uint8_t gl_fn; /* Positive if global function has been called */
 
 LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
 
@@ -442,6 +443,7 @@ static void app_exit (struct nvm_ftl *ftl)
 {
     int ret, retry;
     struct app_channel *lch;
+    struct nvm_ftl_cap_gl_fn app_gl;
 
     LIST_FOREACH(lch, &app_ch_head, entry){
         retry = 0;
@@ -461,11 +463,42 @@ static void app_exit (struct nvm_ftl *ftl)
         free(lch->bbtbl->tbl);
         free(lch->bbtbl);
     }
+
+    /* APPNVM Global Exit */
+    app_gl.arg = NULL;
+    app_gl.ftl_id = FTL_ID_APPNVM;
+    app_gl.fn_id = 0;
+    nvm_ftl_cap_exec(FTL_CAP_EXIT_FN, &app_gl);
+
     while (!LIST_EMPTY(&app_ch_head)) {
         lch = LIST_FIRST(&app_ch_head);
         LIST_REMOVE (lch, entry);
         free(lch);
     }
+}
+
+static int app_init_fn (uint16_t fn_id, void *arg)
+{
+    struct nvm_ppa_addr *ppa;
+    struct app_channel *lch;
+
+    LIST_FOREACH(lch, &app_ch_head, entry){
+
+        for (int j = 0; j < 3000; j++) {
+            int n = j % 20;
+            ppa = malloc (sizeof (uint64_t) * n * 8);
+            appnvm()->ch_prov.get_ppas_fn (lch, ppa, n);
+            free(ppa);
+        }
+
+    }
+
+    return 0;
+}
+
+static void app_exit_fn (uint16_t fn_id)
+{
+    printf ("appnvm: exit global\n");
 }
 
 struct nvm_ftl_ops app_ops = {
@@ -475,6 +508,8 @@ struct nvm_ftl_ops app_ops = {
     .exit        = app_exit,
     .get_bbtbl   = app_ftl_get_bbtbl,
     .set_bbtbl   = app_ftl_set_bbtbl,
+    .init_fn     = app_init_fn,
+    .exit_fn     = app_exit_fn
 };
 
 struct nvm_ftl app_ftl = {
@@ -487,6 +522,8 @@ struct nvm_ftl app_ftl = {
 
 int ftl_appnvm_init (void)
 {
+    gl_fn = 0;
+
     /* AppNVM initialization */
     bbt_byte_register ();
     blk_md_register ();
@@ -495,6 +532,8 @@ int ftl_appnvm_init (void)
     LIST_INIT(&app_ch_head);
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;
+    app_ftl.cap |= 1 << FTL_CAP_INIT_FN;
+    app_ftl.cap |= 1 << FTL_CAP_EXIT_FN;
     app_ftl.bbtbl_format = FTL_BBTBL_BYTE;
     return nvm_register_ftl(&app_ftl);
 }

@@ -31,6 +31,10 @@
 
 #define APPNVNM_DEBUG       1
 
+enum app_functions {
+    APP_FN_GLOBAL   = 0
+};
+
 enum {
     FTL_PGMAP_OFF   = 0,
     FTL_PGMAP_ON    = 1

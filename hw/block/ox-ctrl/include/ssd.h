@@ -215,7 +215,7 @@ enum RUN_FLAGS {
     RUN_CH         = 1 << 3,
     RUN_PCIE       = 1 << 4,
     RUN_NVME       = 1 << 5,
-    RUN_TESTS      = 1 << 6,
+    RUN_TESTS      = 1 << 6
 };
 
 struct nvm_mmgr;
@@ -290,6 +290,12 @@ struct nvm_ftl_cap_set_bbtbl_st {
     uint16_t            bb_format;
 };
 
+struct nvm_ftl_cap_gl_fn {
+    uint16_t            ftl_id;
+    uint16_t            fn_id;
+    void                *arg;
+};
+
 /* --- FTL CAPABILITIES BIT OFFSET --- */
 
 enum {
@@ -299,9 +305,10 @@ enum {
     /* Get/Set Logical to Physical Table support */
     FTL_CAP_GET_L2PTBL          = 0x02,
     FTL_CAP_SET_L2PTBL          = 0x03,
-    /* Global inter-channel function support */
-    FTL_CAP_INIT_GL_FUNCTION    = 0x04,
-    FTL_CAP_EXIT_GL_FUNCTION    = 0x05
+    /* Application function support */
+    FTL_CAP_INIT_FN             = 0x04,
+    FTL_CAP_EXIT_FN             = 0x05,
+    FTL_CAP_CALL_FN             = 0X06
 };
 
 /* --- FTL BAD BLOCK TABLE FORMATS --- */
@@ -320,6 +327,9 @@ typedef int       (nvm_ftl_init_channel)(struct nvm_channel *);
 typedef void      (nvm_ftl_exit)(struct nvm_ftl *);
 typedef int       (nvm_ftl_get_bbtbl)(struct nvm_ppa_addr *,uint8_t *,uint32_t);
 typedef int       (nvm_ftl_set_bbtbl)(struct nvm_ppa_addr *, uint8_t);
+typedef int       (nvm_ftl_init_fn)(uint16_t, void *arg);
+typedef void      (nvm_ftl_exit_fn)(uint16_t);
+typedef int       (nvm_ftl_call_fn)(uint16_t, void *arg);
 
 struct nvm_ftl_ops {
     nvm_ftl_submit_io      *submit_io; /* FTL queue request consumer */
@@ -328,6 +338,9 @@ struct nvm_ftl_ops {
     nvm_ftl_exit           *exit;
     nvm_ftl_get_bbtbl      *get_bbtbl;
     nvm_ftl_set_bbtbl      *set_bbtbl;
+    nvm_ftl_init_fn        *init_fn;
+    nvm_ftl_exit_fn        *exit_fn;
+    nvm_ftl_call_fn        *call_fn;
 };
 
 struct nvm_ftl {

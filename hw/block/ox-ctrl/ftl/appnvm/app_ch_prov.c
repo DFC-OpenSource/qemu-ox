@@ -523,16 +523,8 @@ static int ch_prov_init (struct app_channel *lch)
         goto FREE_BLKS;
     }
 
-     log_info("    [appnvm: Channel Provisioning started. Ch %d]\n",
+    log_info("    [appnvm: Channel Provisioning started. Ch %d]\n",
                                                                 lch->ch->ch_id);
-     struct nvm_ppa_addr *ppa;
-     for (int j = 0; j < 3000; j++) {
-        int n = j % 20;
-        ppa = malloc (sizeof (uint64_t) * n * 8);
-        appnvm()->ch_prov.get_ppas_fn (lch,ppa,n);
-        free(ppa);
-     }
-
     return 0;
 
 FREE_BLKS:
