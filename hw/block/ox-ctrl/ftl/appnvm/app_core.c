@@ -440,9 +440,20 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
 
 static void app_exit (struct nvm_ftl *ftl)
 {
+    int ret, retry;
     struct app_channel *lch;
 
     LIST_FOREACH(lch, &app_ch_head, entry){
+        retry = 0;
+        do {
+            retry++;
+            ret = appnvm()->md.flush_fn (lch);
+        } while (ret && retry < APPNVM_FLUSH_RETRY);
+
+        /* TODO: Recover from last checkpoint (make a checkpoint) */
+        if (ret)
+            log_err("[appnvm: ERROR. Block metadata not flushed to NVM.\n]");
+
         appnvm()->ch_prov.exit_fn (lch);
         free(lch->blk_md->tbl);
         free(lch->blk_md);

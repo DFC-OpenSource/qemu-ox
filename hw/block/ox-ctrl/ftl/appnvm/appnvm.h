@@ -27,6 +27,8 @@
 #define APP_TRANS_TO_NVM    0
 #define APP_TRANS_FROM_NVM  1
 
+#define APPNVM_FLUSH_RETRY  3
+
 #define APPNVNM_DEBUG       1
 
 enum {
