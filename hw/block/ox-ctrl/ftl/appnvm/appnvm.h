@@ -27,6 +27,8 @@
 #define APP_TRANS_TO_NVM    0
 #define APP_TRANS_FROM_NVM  1
 
+#define APPNVNM_DEBUG       1
+
 enum {
     FTL_PGMAP_OFF   = 0,
     FTL_PGMAP_ON    = 1
@@ -119,7 +121,7 @@ typedef struct app_blk_md_entry *(app_md_get) (struct app_channel *, uint16_t);
 typedef int  (app_ch_prov_init) (struct app_channel *);
 typedef void (app_ch_prov_exit) (struct app_channel *);
 typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
-typedef struct nvm_ppa_addr *(app_ch_prov_get_ppas) (struct app_channel *,
+typedef int  (app_ch_prov_get_ppas)(struct app_channel *, struct nvm_ppa_addr *,
                                                                      uint16_t);
 
 struct app_global_bbt {

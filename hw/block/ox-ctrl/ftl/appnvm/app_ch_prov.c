@@ -44,6 +44,7 @@ struct ch_prov_lun {
 
 struct ch_prov_line {
     uint16_t              nblks;
+    uint16_t              current_blk;
     struct ch_prov_blk  **vblks;
 };
 
@@ -105,7 +106,7 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
 
             if (vblk->blk_md->flags & APP_BLK_MD_OPEN)
                 TAILQ_INSERT_HEAD(&(prov->luns[lun].open_blk_head),
-                                                                   vblk, open_entry);
+                                                              vblk, open_entry);
              return 0;
         }
 
@@ -323,6 +324,8 @@ NEXT:
         }
         free (cmd);
 
+        vblk->blk_md->erase_count++;
+
         if (ret) {
             for (pl = 0; pl < n_pl; pl++)
                 lch->ch->ftl->ops->set_bbtbl (&vblk->addr, NVM_BBT_BAD);
@@ -343,6 +346,13 @@ NEXT:
             vblk->blk_md->flags ^= APP_BLK_MD_LINE;
 
         memset (vblk->blk_md->pg_state, 0x0, 64);
+
+        if (APPNVNM_DEBUG) {
+            printf("[appnvm (ch_prov): blk GET: (%d %d %d) - Free: %d,"
+                    " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
+                    vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
+                                                         p_lun->nopen_blks);
+        }
 
         return vblk;
     }
@@ -381,6 +391,13 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
     p_lun->nfree_blks++;
     p_lun->nused_blks--;
     pthread_mutex_unlock(&(p_lun->l_mutex));
+
+    if (APPNVNM_DEBUG) {
+        printf("[appnvm (ch_prov): blk PUT: (%d %d %d) - Free: %d,"
+                " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
+                vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
+                                                     p_lun->nopen_blks);
+    }
 
     return 0;
 }
@@ -455,16 +472,31 @@ NEXT_LUN:
         lun = (lun == lch->ch->geometry->lun_per_ch - 1) ? 0 : lun + 1;
     } while (targets < APP_PROV_LINE);
 
+    prov->line.nblks = targets;
+
     /* Check if line has at least 1 block available */
     if (targets == 0) {
-        log_err ("appnvm (ch_prov): CH %d has no blocks left.", lch->ch->ch_id);
+        log_err("[appnvm (ch_prov): CH %d has no blocks left.]",lch->ch->ch_id);
+        if (APPNVNM_DEBUG)
+            printf("appnvm(ch_prv): CH %d has no blocks left\n",lch->ch->ch_id);
         return -1;
     }
 
     /* set the line pointers */
-    prov->line.nblks = targets;
     for (i = 0; i < targets; i++)
         prov->line.vblks[i] = line[i];
+
+    if (prov->line.current_blk >= targets)
+        prov->line.current_blk = 0;
+
+    if (APPNVNM_DEBUG) {
+        printf ("[appnvm (ch_prov): Line is renewed: ");
+        for (int j = 0; j < targets; j++)
+            printf ("(%d %d %d)", prov->line.vblks[j]->addr.g.ch,
+                                   prov->line.vblks[j]->addr.g.lun,
+                                   prov->line.vblks[j]->addr.g.blk);
+        printf("]\n");
+    }
 
     return 0;
 }
@@ -479,17 +511,27 @@ static int ch_prov_init (struct app_channel *lch)
     if (ch_prov_init_luns (lch))
         goto FREE_PROV;
 
+    prov->line.current_blk = 0;
     prov->line.vblks = malloc (sizeof (struct ch_prov_blk *) * APP_PROV_LINE);
     if (!prov->line.vblks)
         goto FREE_LUNS;
 
     if (ch_prov_renew_line (lch)) {
-        log_err ("[appnvm (ch_prov): CHANNEL %d is FULL!\n",lch->ch->ch_id);
+        log_err ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
+        if (APPNVNM_DEBUG)
+            printf ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
         goto FREE_BLKS;
     }
 
      log_info("    [appnvm: Channel Provisioning started. Ch %d]\n",
                                                                 lch->ch->ch_id);
+     struct nvm_ppa_addr *ppa;
+     for (int j = 0; j < 3000; j++) {
+        int n = j % 20;
+        ppa = malloc (sizeof (uint64_t) * n * 8);
+        appnvm()->ch_prov.get_ppas_fn (lch,ppa,n);
+        free(ppa);
+     }
 
     return 0;
 
@@ -511,15 +553,86 @@ static void ch_prov_exit (struct app_channel *lch)
     free (prov);
 }
 
-/* Returns a list of PPAs to be written. We assume that 1 thread per channel,
- * so, no form of lock is needed */
-static struct nvm_ppa_addr *ch_prov_get_ppas (struct app_channel *lch,
+/**
+ * Returns a list of PPAs to be written based in the current block line. The
+ * pages are collected using round-robin, and the PPAs in a page are collected
+ * following write constraints (sequential sectors and planes). The minimum
+ * number of PPAs returned is 'pgs * sec_per_pg * n_planes'. We assume 1 thread
+ * per channel and no form of locking is needed.
+ *
+ * @param list - Vector of PPAs. Needs enough allocated memory for
+ *                                          'pgs * sec_per_pg * n_planes' PPAs.
+ * @param pgs - Number of PPAs requested.
+ * @return 0 in success, negative in failure (channel is full).
+ */
+static int ch_prov_get_ppas (struct app_channel *lch, struct nvm_ppa_addr *list,
                                                                 uint16_t pgs)
 {
-    /* TODO: Get ppas from the line as round-robin. If a block is full,
-     get a new block and renew the line */
+    uint16_t *li;
+    uint32_t sec, pl, renew, pgs_left;
+    struct ch_prov_blk *blk;
+    struct nvm_ppa_addr *ppa_off;
+    struct nvm_ppa_addr tppa;
+    struct ch_prov_lun *p_lun;
+    struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
+    struct nvm_mmgr_geometry *g = lch->ch->geometry;
 
-    return NULL;
+    /* Check if device is full (no blocks in the line) */
+    if (prov->line.nblks < 1)
+        return -1;
+
+    li = &prov->line.current_blk;
+    renew = 0;
+    pgs_left = pgs;
+    while (pgs_left) {
+        blk = prov->line.vblks[*li];
+        ppa_off = &list[g->n_of_planes * g->sec_per_pg * (pgs - pgs_left)];
+
+        tppa.ppa = blk->addr.ppa;
+        tppa.g.pg = blk->blk_md->current_pg;
+
+        for (pl = 0; pl < g->n_of_planes; pl++) {
+            for (sec = 0; sec < g->sec_per_pg; sec++) {
+                tppa.g.pl = pl;
+                tppa.g.sec = sec;
+                ppa_off[sec + pl * g->sec_per_pg].ppa = tppa.ppa;
+            }
+        }
+
+        /* All page states are set to 0 when block is new, 0 means valid page,
+         so, we don't need to update the page state here */
+
+        pgs_left--;
+        blk->blk_md->current_pg++;
+
+        /* Close block if this is the last page */
+        if (blk->blk_md->current_pg == g->pg_per_blk) {
+            p_lun = &prov->luns[tppa.g.lun];
+
+            TAILQ_REMOVE(&p_lun->open_blk_head, blk, open_entry);
+            p_lun->nopen_blks--;
+
+            if (blk->blk_md->flags & APP_BLK_MD_LINE)
+                blk->blk_md->flags ^= APP_BLK_MD_LINE;
+            if (blk->blk_md->flags & APP_BLK_MD_OPEN)
+                blk->blk_md->flags ^= APP_BLK_MD_OPEN;
+
+            renew = 1;
+        }
+
+        *li = (*li < prov->line.nblks - 1) ? *li + 1 : 0;
+
+        /* Renew the line if a block has been closed */
+        if ((*li == 0 || pgs_left == 0) && renew) {
+            renew = 0;
+            if (ch_prov_renew_line (lch)) {
+                if (pgs_left > 0)
+                    return -1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 void blk_ch_prov_register (void) {
