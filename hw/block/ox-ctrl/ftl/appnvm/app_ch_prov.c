@@ -13,7 +13,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "appnvm.h"
-#include <search.h>
 #include <sys/queue.h>
 #include <pthread.h>
 #include <time.h>
@@ -347,7 +346,7 @@ NEXT:
 
         memset (vblk->blk_md->pg_state, 0x0, 64);
 
-        if (APPNVNM_DEBUG) {
+        if (APPNVM_DEBUG) {
             printf("[appnvm (ch_prov): blk GET: (%d %d %d) - Free: %d,"
                     " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
                     vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
@@ -392,7 +391,7 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
     p_lun->nused_blks--;
     pthread_mutex_unlock(&(p_lun->l_mutex));
 
-    if (APPNVNM_DEBUG) {
+    if (APPNVM_DEBUG) {
         printf("[appnvm (ch_prov): blk PUT: (%d %d %d) - Free: %d,"
                 " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
                 vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
@@ -477,7 +476,7 @@ NEXT_LUN:
     /* Check if line has at least 1 block available */
     if (targets == 0) {
         log_err("[appnvm (ch_prov): CH %d has no blocks left.]",lch->ch->ch_id);
-        if (APPNVNM_DEBUG)
+        if (APPNVM_DEBUG)
             printf("appnvm(ch_prv): CH %d has no blocks left\n",lch->ch->ch_id);
         return -1;
     }
@@ -489,7 +488,7 @@ NEXT_LUN:
     if (prov->line.current_blk >= targets)
         prov->line.current_blk = 0;
 
-    if (APPNVNM_DEBUG) {
+    if (APPNVM_DEBUG) {
         printf ("[appnvm (ch_prov): Line is renewed: ");
         for (int j = 0; j < targets; j++)
             printf ("(%d %d %d)", prov->line.vblks[j]->addr.g.ch,
@@ -518,7 +517,7 @@ static int ch_prov_init (struct app_channel *lch)
 
     if (ch_prov_renew_line (lch)) {
         log_err ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
-        if (APPNVNM_DEBUG)
+        if (APPNVM_DEBUG)
             printf ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
         goto FREE_BLKS;
     }
@@ -627,7 +626,7 @@ static int ch_prov_get_ppas (struct app_channel *lch, struct nvm_ppa_addr *list,
     return 0;
 }
 
-void blk_ch_prov_register (void) {
+void ch_prov_register (void) {
     appnvm()->ch_prov.init_fn = ch_prov_init;
     appnvm()->ch_prov.exit_fn = ch_prov_exit;
     appnvm()->ch_prov.put_blk_fn = ch_prov_blk_put;

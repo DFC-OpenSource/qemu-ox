@@ -1106,7 +1106,6 @@ int nvm_init_ctrl (int argc, char **argv, QemuOxCtrl *qemu)
             break;
         case OX_RUN_MODE:
             core.run_flag ^= RUN_TESTS;
-            goto OUT;
            // while(1) { usleep(1); } break;
             return 0;
         default:

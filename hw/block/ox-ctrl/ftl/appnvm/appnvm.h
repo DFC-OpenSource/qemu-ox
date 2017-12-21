@@ -29,10 +29,15 @@
 
 #define APPNVM_FLUSH_RETRY  3
 
-#define APPNVNM_DEBUG       1
+#define APPNVM_DEBUG       1
 
 enum app_functions {
     APP_FN_GLOBAL   = 0
+};
+
+enum app_flags_ids {
+    APP_FLAGS_ACT_CH   = 1,
+    APP_FLAGS_CHECK_GC = 2
 };
 
 enum {
@@ -130,6 +135,12 @@ typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
 typedef int  (app_ch_prov_get_ppas)(struct app_channel *, struct nvm_ppa_addr *,
                                                                      uint16_t);
 
+typedef int     (app_flags_init) (void);
+typedef void    (app_flags_exit) (void);
+typedef void    (app_flags_set) (uint16_t flag_id, uint16_t offset);
+typedef void    (app_flags_unset) (uint16_t flag_id, uint16_t offset);
+typedef uint8_t (app_flags_check) (uint16_t flag_id, uint16_t offset);
+
 struct app_global_bbt {
     app_bbt_create      *create_fn;
     app_bbt_flush       *flush_fn;
@@ -151,10 +162,19 @@ struct app_ch_prov {
     app_ch_prov_get_ppas    *get_ppas_fn;
 };
 
+struct app_flags {
+    app_flags_init          *init_fn;
+    app_flags_exit          *exit_fn;
+    app_flags_set           *set_fn;
+    app_flags_unset         *unset_fn;
+    app_flags_check         *check_fn;
+};
+
 struct app_global {
     struct app_global_bbt   bbt;
     struct app_global_md    md;
     struct app_ch_prov      ch_prov;
+    struct app_flags        flags;
 };
 
 struct app_io_data *app_alloc_pg_io (struct app_channel *lch);
@@ -170,6 +190,7 @@ int     app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
 struct app_global *appnvm (void);
 void bbt_byte_register (void);
 void blk_md_register (void);
-void blk_ch_prov_register (void);
+void ch_prov_register (void);
+void flags_register (void);
 
 #endif /* APP_H */

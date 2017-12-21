@@ -23,6 +23,7 @@ struct app_global __appnvm;
 static uint8_t gl_fn; /* Positive if global function has been called */
 
 LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
+uint16_t app_nch;
 
 static int app_submit_io (struct nvm_io_cmd *);
 
@@ -369,6 +370,7 @@ static int app_init_channel (struct nvm_channel *ch)
     lch->ch = ch;
 
     LIST_INSERT_HEAD(&app_ch_head, lch, entry);
+    app_nch++;
 
     if (app_reserve_blks (lch))
         goto FREE_LCH;
@@ -388,6 +390,7 @@ static int app_init_channel (struct nvm_channel *ch)
 
 FREE_LCH:
     LIST_REMOVE (lch, entry);
+    app_nch--;
     free(lch);
     log_err("[appnvm ERR: Ch %d -> Not possible to read/create bad block "
                                                         "table.]\n", ch->ch_id);
@@ -473,32 +476,48 @@ static void app_exit (struct nvm_ftl *ftl)
     while (!LIST_EMPTY(&app_ch_head)) {
         lch = LIST_FIRST(&app_ch_head);
         LIST_REMOVE (lch, entry);
+        app_nch--;
         free(lch);
     }
 }
 
-static int app_init_fn (uint16_t fn_id, void *arg)
+static int app_global_init (void)
 {
-    struct nvm_ppa_addr *ppa;
-    struct app_channel *lch;
-
-    LIST_FOREACH(lch, &app_ch_head, entry){
-
-        for (int j = 0; j < 3000; j++) {
-            int n = j % 20;
-            ppa = malloc (sizeof (uint64_t) * n * 8);
-            appnvm()->ch_prov.get_ppas_fn (lch, ppa, n);
-            free(ppa);
-        }
-
+    if (appnvm()->flags.init_fn ()) {
+        log_err ("[appnvm: Flags NOT started.\n");
+        return -1;
     }
 
     return 0;
 }
 
+static void app_global_exit (void)
+{
+    appnvm()->flags.exit_fn ();
+}
+
+static int app_init_fn (uint16_t fn_id, void *arg)
+{
+    switch (fn_id) {
+        case APP_FN_GLOBAL:
+            gl_fn = 1;
+            return app_global_init();
+            break;
+        default:
+            log_info ("[appnvm (init_fn): Function not found. id %d\n", fn_id);
+            return -1;
+    }
+}
+
 static void app_exit_fn (uint16_t fn_id)
 {
-    printf ("appnvm: exit global\n");
+    switch (fn_id) {
+        case APP_FN_GLOBAL:
+            return (gl_fn) ? app_global_exit() : 0;
+            break;
+        default:
+            log_info ("[appnvm (exit_fn): Function not found. id %d\n", fn_id);
+    }
 }
 
 struct nvm_ftl_ops app_ops = {
@@ -523,11 +542,13 @@ struct nvm_ftl app_ftl = {
 int ftl_appnvm_init (void)
 {
     gl_fn = 0;
+    app_nch = 0;
 
     /* AppNVM initialization */
     bbt_byte_register ();
     blk_md_register ();
-    blk_ch_prov_register ();
+    ch_prov_register ();
+    flags_register ();
 
     LIST_INIT(&app_ch_head);
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
