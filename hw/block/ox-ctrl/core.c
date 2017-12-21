@@ -712,79 +712,70 @@ static int nvm_ch_config (void)
     return 0;
 }
 
-static int nvm_ftl_cap_get_bbtbl (struct nvm_ppa_addr *ppa,
-                                            struct nvm_channel *ch, void **arg)
+static int nvm_ftl_cap_get_bbtbl (struct nvm_channel *ch,
+                                          struct nvm_ftl_cap_get_bbtbl_st *arg)
 {
-    uint8_t  *bbtbl     = (uint8_t *)  arg[1];
-    uint32_t *nblk      = (uint32_t *) arg[2];
-    uint16_t *bb_format = (uint16_t *) arg[3];
-
-    if (*nblk < 1)
+    if (arg->ppa.g.ch >= core.nvm_ch_count)
         return -1;
 
-    if (ch->ftl->bbtbl_format == *bb_format)
-        return ch->ftl->ops->get_bbtbl(ppa, bbtbl, *nblk);
+    if (arg->nblk < 1)
+        return -1;
+
+    if (ch->ftl->bbtbl_format == arg->bb_format)
+        return ch->ftl->ops->get_bbtbl(&arg->ppa, arg->bbtbl, arg->nblk);
 
     return -1;
 }
 
-static int nvm_ftl_cap_set_bbtbl (struct nvm_ppa_addr *ppa,
-                                            struct nvm_channel *ch, void **arg)
+static int nvm_ftl_cap_set_bbtbl (struct nvm_channel *ch,
+                                          struct nvm_ftl_cap_set_bbtbl_st *arg)
 {
-    uint8_t *value      = (uint8_t *)  arg[1];
-    uint16_t *bb_format = (uint16_t *) arg[2];
+    if (arg->ppa.g.ch >= core.nvm_ch_count)
+        return -1;
 
-    if (ch->ftl->bbtbl_format == *bb_format)
-        return ch->ftl->ops->set_bbtbl(ppa, *value);
+    if (ch->ftl->bbtbl_format == arg->bb_format)
+        return ch->ftl->ops->set_bbtbl(&arg->ppa, arg->value);
 
     return -1;
 }
 
-int nvm_ftl_cap_exec (uint8_t cap, void **arg, int narg)
+int nvm_ftl_cap_exec (uint8_t cap, void *arg)
 {
-    struct nvm_ppa_addr *ppa;
     struct nvm_channel *ch;
-    int i;
-
-    if (narg < 1)
-        goto OUT;
-
-    for (i = 0; i < narg; i++) {
-        if (nvm_memcheck(arg[i]))
-            goto OUT;
-    }
-
-    ppa = arg[0];
-    if (ppa->g.ch >= core.nvm_ch_count)
-        goto OUT;
-
-    ch = core.nvm_ch[ppa->g.ch];
-    if (nvm_memcheck(ch))
-        goto OUT;
+    struct nvm_ftl_cap_set_bbtbl_st *set_bbtbl;
+    struct nvm_ftl_cap_get_bbtbl_st *get_bbtbl;
 
     switch (cap) {
         case FTL_CAP_GET_BBTBL:
 
-            if (narg < 4 || nvm_memcheck(ch->ftl->ops->get_bbtbl))
+            get_bbtbl = (struct nvm_ftl_cap_get_bbtbl_st *) arg;
+            ch = core.nvm_ch[get_bbtbl->ppa.g.ch];
+            if (!ch->ftl->ops->get_bbtbl)
                 goto OUT;
             if (ch->ftl->cap & 1 << FTL_CAP_GET_BBTBL) {
-                if (nvm_ftl_cap_get_bbtbl(ppa, ch, arg)) goto OUT;
+                if (nvm_ftl_cap_get_bbtbl(ch, arg))
+                    goto OUT;
                 return 0;
             }
             break;
 
         case FTL_CAP_SET_BBTBL:
 
-            if (narg < 3 || nvm_memcheck(ch->ftl->ops->set_bbtbl))
+            set_bbtbl = (struct nvm_ftl_cap_set_bbtbl_st *) arg;
+            ch = core.nvm_ch[set_bbtbl->ppa.g.ch];
+            if (!ch->ftl->ops->set_bbtbl)
                 goto OUT;
             if (ch->ftl->cap & 1 << FTL_CAP_SET_BBTBL) {
-                if (nvm_ftl_cap_set_bbtbl(ppa, ch, arg)) goto OUT;
+                if (nvm_ftl_cap_set_bbtbl(ch, arg))
+                    goto OUT;
                 return 0;
             }
             break;
 
         case FTL_CAP_GET_L2PTBL:
         case FTL_CAP_SET_L2PTBL:
+        case FTL_CAP_INIT_GL_FUNCTION:
+        case FTL_CAP_EXIT_GL_FUNCTION:
         default:
             goto OUT;
     }

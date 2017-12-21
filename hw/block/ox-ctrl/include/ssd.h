@@ -277,15 +277,31 @@ struct nvm_pcie {
     uint8_t                     running;
 };
 
+struct nvm_ftl_cap_get_bbtbl_st {
+    struct nvm_ppa_addr ppa;
+    uint8_t             *bbtbl;
+    uint32_t            nblk;
+    uint16_t            bb_format;
+};
+
+struct nvm_ftl_cap_set_bbtbl_st {
+    struct nvm_ppa_addr ppa;
+    uint8_t             value;
+    uint16_t            bb_format;
+};
+
 /* --- FTL CAPABILITIES BIT OFFSET --- */
 
 enum {
     /* Get/Set Bad Block Table support */
-    FTL_CAP_GET_BBTBL     = 0x00,
-    FTL_CAP_SET_BBTBL     = 0x01,
+    FTL_CAP_GET_BBTBL           = 0x00,
+    FTL_CAP_SET_BBTBL           = 0x01,
     /* Get/Set Logical to Physical Table support */
-    FTL_CAP_GET_L2PTBL    = 0x02,
-    FTL_CAP_SET_L2PTBL    = 0x03,
+    FTL_CAP_GET_L2PTBL          = 0x02,
+    FTL_CAP_SET_L2PTBL          = 0x03,
+    /* Global inter-channel function support */
+    FTL_CAP_INIT_GL_FUNCTION    = 0x04,
+    FTL_CAP_EXIT_GL_FUNCTION    = 0x05
 };
 
 /* --- FTL BAD BLOCK TABLE FORMATS --- */
@@ -437,7 +453,7 @@ void nvm_callback (struct nvm_mmgr_io_cmd *);
 int  nvm_dma (void *, uint64_t, ssize_t, uint8_t);
 int  nvm_memcheck (void *);
 int  nvm_contains_ppa (struct nvm_ppa_addr *, uint32_t, struct nvm_ppa_addr);
-int  nvm_ftl_cap_exec (uint8_t, void **, int);
+int  nvm_ftl_cap_exec (uint8_t, void *);
 int  nvm_init_ctrl (int, char **, QemuOxCtrl *);
 int  nvm_test_unit (struct nvm_init_arg *);
 int  nvm_admin_unit (struct nvm_init_arg *);

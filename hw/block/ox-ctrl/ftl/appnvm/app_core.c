@@ -452,7 +452,8 @@ static void app_exit (struct nvm_ftl *ftl)
 
         /* TODO: Recover from last checkpoint (make a checkpoint) */
         if (ret)
-            log_err("[appnvm: ERROR. Block metadata not flushed to NVM.\n]");
+            log_err("[appnvm: ERROR. Block metadata not flushed to NVM. "
+                                              "Channel %d\n]", lch->ch->ch_id);
 
         appnvm()->ch_prov.exit_fn (lch);
         free(lch->blk_md->tbl);
