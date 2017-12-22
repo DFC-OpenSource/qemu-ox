@@ -21,6 +21,7 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 
 #define APP_PROV_LINE   4
+
 struct ch_prov_blk {
     struct nvm_ppa_addr             addr;
     struct app_blk_md_entry         *blk_md;

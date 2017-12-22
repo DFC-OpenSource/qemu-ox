@@ -18,11 +18,10 @@
 #include <pthread.h>
 #include <sys/queue.h>
 #include "appnvm.h"
+#include "hw/block/ox-ctrl/include/uatomic.h"
 
 struct app_global __appnvm;
 static uint8_t gl_fn; /* Positive if global function has been called */
-
-LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
 uint16_t app_nch;
 
 static int app_submit_io (struct nvm_io_cmd *);
@@ -204,17 +203,6 @@ int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
     return ret;
 }
 
-static struct app_channel *app_get_ch_instance(uint16_t ch_id)
-{
-    struct app_channel *lch;
-    LIST_FOREACH(lch, &app_ch_head, entry){
-        if(lch->ch->ch_mmgr_id == ch_id)
-            return lch;
-    }
-
-    return NULL;
-}
-
 static void app_callback_io (struct nvm_mmgr_io_cmd *cmd)
 {
 
@@ -229,178 +217,34 @@ static int app_submit_io (struct nvm_io_cmd *cmd)
     return 0;
 }
 
-static int app_reserve_blks (struct app_channel *lch)
-{
-    int trsv, n, pl, n_pl;
-    struct nvm_ppa_addr *ppa;
-    struct nvm_channel *ch = lch->ch;
-
-    n_pl = ch->geometry->n_of_planes;
-
-    ch->ftl_rsv = APP_RSV_BLK_COUNT;
-    trsv = ch->ftl_rsv * n_pl;
-
-    /* ftl_rsv_list is first allocated by the MMGR that also frees the memory */
-    ch->ftl_rsv_list = realloc (ch->ftl_rsv_list,
-                                           trsv * sizeof(struct nvm_ppa_addr));
-    if (!ch->ftl_rsv_list)
-        return EMEM;
-
-    memset (ch->ftl_rsv_list, 0, trsv * sizeof(struct nvm_ppa_addr));
-
-    for (n = 0; n < ch->ftl_rsv; n++) {
-        for (pl = 0; pl < n_pl; pl++) {
-            ppa = &ch->ftl_rsv_list[n_pl * n + pl];
-            ppa->g.ch = ch->ch_mmgr_id;
-            ppa->g.lun = 0;
-            ppa->g.blk = n + ch->mmgr_rsv;
-            ppa->g.pl = pl;
-        }
-    }
-
-    /* Set reserved blocks */
-    lch->bbt_blk  = ch->mmgr_rsv + APP_RSV_BBT_OFF;
-    lch->meta_blk = ch->mmgr_rsv + APP_RSV_META_OFF;
-    lch->l2p_blk  = ch->mmgr_rsv + APP_RSV_L2P_OFF;
-
-    return 0;
-}
-
-static int app_init_bbt (struct app_channel *lch)
-{
-    int ret = -1;
-    uint32_t tblks;
-    struct app_bbtbl *bbt;
-    struct nvm_channel *ch = lch->ch;
-    int n_pl = ch->geometry->n_of_planes;
-
-    /* For bad block table we consider blocks in a single plane */
-    tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch * n_pl;
-
-    lch->bbtbl = malloc (sizeof(struct app_bbtbl));
-    if (!lch->bbtbl)
-        return -1;
-
-    bbt = lch->bbtbl;
-    bbt->tbl = malloc (sizeof(uint8_t) * tblks);
-    if (!bbt->tbl)
-        goto FREE_BBTBL;
-
-    memset (bbt->tbl, 0, tblks);
-    bbt->magic = 0;
-    bbt->bb_sz = tblks;
-
-    ret = appnvm()->bbt.load_fn (lch);
-    if (ret) goto ERR;
-
-    /* create and flush bad block table if it does not exist */
-    /* this procedure will erase the entire device (only in test mode) */
-    if (bbt->magic == APP_MAGIC) {
-        ret = appnvm()->bbt.create_fn (lch, APP_BBT_EMERGENCY);
-        if (ret) goto ERR;
-        ret = appnvm()->bbt.flush_fn (lch);
-        if (ret) goto ERR;
-    }
-
-    log_info("    [appnvm: Bad Block Table started. Ch %d]\n", ch->ch_id);
-
-    return 0;
-
-ERR:
-    free(lch->bbtbl->tbl);
-FREE_BBTBL:
-    free(lch->bbtbl);
-    return -1;
-}
-
-static int app_init_blk_md (struct app_channel *lch)
-{
-    int ret = -1;
-    uint32_t tblks;
-    struct app_blk_md *md;
-    struct nvm_channel *ch = lch->ch;
-
-    /* For block metadata, we consider multi-plane blocks */
-    tblks = ch->geometry->blk_per_lun * ch->geometry->lun_per_ch;
-
-    lch->blk_md = malloc (sizeof(struct app_blk_md));
-    if (!lch->blk_md)
-        return -1;
-
-    md = lch->blk_md;
-    md->entry_sz = sizeof(struct app_blk_md_entry);
-    md->tbl = malloc (md->entry_sz * tblks);
-    if (!md->tbl)
-        goto FREE_MD;
-
-    memset (md->tbl, 0, md->entry_sz * tblks);
-    md->magic = 0;
-    md->entries = tblks;
-
-    ret = appnvm()->md.load_fn (lch);
-    if (ret) goto ERR;
-
-    /* create and flush block metadata table if it does not exist */
-    if (md->magic == APP_MAGIC) {
-        ret = appnvm()->md.create_fn (lch);
-        if (ret) goto ERR;
-        ret = appnvm()->md.flush_fn (lch);
-        if (ret) goto ERR;
-    }
-
-    log_info("    [appnvm: Block Metadata started. Ch %d]\n", ch->ch_id);
-
-    return 0;
-
-ERR:
-    free(lch->blk_md->tbl);
-FREE_MD:
-    free(lch->blk_md);
-    return -1;
-}
-
 static int app_init_channel (struct nvm_channel *ch)
 {
+    int ret;
     struct app_channel *lch;
 
-    lch = malloc (sizeof(struct app_channel));
-    if (!lch)
-        return EMEM;
+    ret = appnvm()->channels.init_fn (ch, app_nch);
+    if (ret)
+        return ret;
 
-    lch->ch = ch;
+    lch = appnvm()->channels.get_fn (app_nch);
+    lch->flags.busy.counter = U_ATOMIC_INIT_RUNTIME(0);
+    pthread_spin_init (&lch->flags.busy_spin, 0);
+    pthread_spin_init (&lch->flags.active_spin, 0);
+    pthread_spin_init (&lch->flags.need_gc_spin, 0);
 
-    LIST_INSERT_HEAD(&app_ch_head, lch, entry);
+    /* Enabled channel and no need for GC */
+    appnvm_ch_active_set (lch);
+    appnvm_ch_need_gc_unset (lch);
+
     app_nch++;
 
-    if (app_reserve_blks (lch))
-        goto FREE_LCH;
-
-    if (app_init_bbt (lch))
-        goto FREE_LCH;
-
-    if (app_init_blk_md (lch))
-        goto FREE_LCH;
-
-    if (appnvm()->ch_prov.init_fn (lch))
-        goto FREE_LCH;
-
-    log_info("    [appnvm: channel %d started with %d bad blocks.]\n",ch->ch_id,
-                                                          lch->bbtbl->bb_count);
     return 0;
-
-FREE_LCH:
-    LIST_REMOVE (lch, entry);
-    app_nch--;
-    free(lch);
-    log_err("[appnvm ERR: Ch %d -> Not possible to read/create bad block "
-                                                        "table.]\n", ch->ch_id);
-    return EMEM;
 }
 
 static int app_ftl_get_bbtbl (struct nvm_ppa_addr *ppa, uint8_t *bbtbl,
                                                                     uint32_t nb)
 {
-    struct app_channel *lch = app_get_ch_instance(ppa->g.ch);
+    struct app_channel *lch = appnvm()->channels.get_fn (ppa->g.ch);
     struct nvm_channel *ch = lch->ch;
     int l_addr = ppa->g.lun * ch->geometry->blk_per_lun *
                                                      ch->geometry->n_of_planes;
@@ -418,7 +262,7 @@ static int app_ftl_get_bbtbl (struct nvm_ppa_addr *ppa, uint8_t *bbtbl,
 static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
 {
     int l_addr, n_pl, flush, ret;
-    struct app_channel *lch = app_get_ch_instance(ppa->g.ch);
+    struct app_channel *lch = appnvm()->channels.get_fn (ppa->g.ch);
 
     n_pl = lch->ch->geometry->n_of_planes;
 
@@ -442,42 +286,30 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
     return 0;
 }
 
-static void app_exit (struct nvm_ftl *ftl)
+static void app_exit (void)
 {
-    int ret, retry;
-    struct app_channel *lch;
-    struct nvm_ftl_cap_gl_fn app_gl;
+    struct app_channel *lch[app_nch];
+    int nch = app_nch, nth, retry;
 
-    LIST_FOREACH(lch, &app_ch_head, entry){
+    appnvm()->channels.get_list_fn (lch, nch);
+
+    for (int i = 0; i < nch; i++) {
+
+        /* Check if channel is busy before exit */
         retry = 0;
         do {
-            retry++;
-            ret = appnvm()->md.flush_fn (lch);
-        } while (ret && retry < APPNVM_FLUSH_RETRY);
+            nth = appnvm_ch_nthreads (lch[i]);
+            if (nth) {
+                usleep (5000);
+                retry++;
+            }
+        } while (nth && retry < 200); /* Waiting max of 1 second */
 
-        /* TODO: Recover from last checkpoint (make a checkpoint) */
-        if (ret)
-            log_err("[appnvm: ERROR. Block metadata not flushed to NVM. "
-                                              "Channel %d\n]", lch->ch->ch_id);
-
-        appnvm()->ch_prov.exit_fn (lch);
-        free(lch->blk_md->tbl);
-        free(lch->blk_md);
-        free(lch->bbtbl->tbl);
-        free(lch->bbtbl);
-    }
-
-    /* APPNVM Global Exit */
-    app_gl.arg = NULL;
-    app_gl.ftl_id = FTL_ID_APPNVM;
-    app_gl.fn_id = 0;
-    nvm_ftl_cap_exec(FTL_CAP_EXIT_FN, &app_gl);
-
-    while (!LIST_EMPTY(&app_ch_head)) {
-        lch = LIST_FIRST(&app_ch_head);
-        LIST_REMOVE (lch, entry);
+        pthread_spin_destroy (&lch[i]->flags.busy_spin);
+        pthread_spin_destroy (&lch[i]->flags.active_spin);
+        pthread_spin_destroy (&lch[i]->flags.need_gc_spin);
+        appnvm()->channels.exit_fn (lch[i]);
         app_nch--;
-        free(lch);
     }
 }
 
@@ -488,11 +320,21 @@ static int app_global_init (void)
         return -1;
     }
 
+    if (appnvm()->gl_prov.init_fn ()) {
+        log_err ("[appnvm: Global Provisioning NOT started.\n");
+        goto EXIT_FLAGS;
+    }
+
     return 0;
+
+EXIT_FLAGS:
+    appnvm()->flags.exit_fn ();
+    return -1;
 }
 
 static void app_global_exit (void)
 {
+    appnvm()->gl_prov.exit_fn ();
     appnvm()->flags.exit_fn ();
 }
 
@@ -545,12 +387,13 @@ int ftl_appnvm_init (void)
     app_nch = 0;
 
     /* AppNVM initialization */
+    channels_register ();
     bbt_byte_register ();
     blk_md_register ();
     ch_prov_register ();
     flags_register ();
+    gl_prov_register ();
 
-    LIST_INIT(&app_ch_head);
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_INIT_FN;

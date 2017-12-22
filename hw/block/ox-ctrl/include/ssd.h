@@ -215,7 +215,8 @@ enum RUN_FLAGS {
     RUN_CH         = 1 << 3,
     RUN_PCIE       = 1 << 4,
     RUN_NVME       = 1 << 5,
-    RUN_TESTS      = 1 << 6
+    RUN_TESTS      = 1 << 6,
+    RUN_APPNVM     = 1 << 7
 };
 
 struct nvm_mmgr;
@@ -324,7 +325,7 @@ struct nvm_ftl;
 typedef int       (nvm_ftl_submit_io)(struct nvm_io_cmd *);
 typedef void      (nvm_ftl_callback_io)(struct nvm_mmgr_io_cmd *);
 typedef int       (nvm_ftl_init_channel)(struct nvm_channel *);
-typedef void      (nvm_ftl_exit)(struct nvm_ftl *);
+typedef void      (nvm_ftl_exit)(void);
 typedef int       (nvm_ftl_get_bbtbl)(struct nvm_ppa_addr *,uint8_t *,uint32_t);
 typedef int       (nvm_ftl_set_bbtbl)(struct nvm_ppa_addr *, uint8_t);
 typedef int       (nvm_ftl_init_fn)(uint16_t, void *arg);

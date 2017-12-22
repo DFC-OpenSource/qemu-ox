@@ -384,7 +384,7 @@ static int lnvm_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
     return 0;
 }
 
-static void lnvm_exit (struct nvm_ftl *ftl)
+static void lnvm_exit (void)
 {
     struct lnvm_channel *lch;
 

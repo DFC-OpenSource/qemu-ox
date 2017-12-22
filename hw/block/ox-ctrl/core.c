@@ -222,6 +222,10 @@ int nvm_register_ftl (struct nvm_ftl *ftl)
         log_info("    [%s cap: Get Logical to Physical Table]\n", ftl->name);
     if (ftl->cap & 1 << FTL_CAP_GET_L2PTBL)
         log_info("    [%s cap: Set Logical to Physical Table]\n", ftl->name);
+    if (ftl->cap & 1 << FTL_CAP_INIT_FN)
+        log_info("    [%s cap: Application Function Init]\n", ftl->name);
+    if (ftl->cap & 1 << FTL_CAP_EXIT_FN)
+        log_info("    [%s cap: Application Function Exit]\n", ftl->name);
 
     if (ftl->bbtbl_format == FTL_BBTBL_BYTE)
         log_info("    [%s Bad block table type: Byte array. 1 byte per blk.]\n",
@@ -654,7 +658,7 @@ static void nvm_unregister_ftl (struct nvm_ftl *ftl)
 
     ox_mq_destroy(ftl->mq);
     core.ftl_q_count -= ftl->nq;
-    ftl->ops->exit(ftl);
+    ftl->ops->exit();
     LIST_REMOVE(ftl, entry);
     core.ftl_count--;
     log_info(" [nvm: FTL (%s)(%d) unregistered.]\n", ftl->name, ftl->ftl_id);
@@ -718,6 +722,7 @@ static int nvm_ch_config (void)
     app_gl.fn_id = 0;
     if (nvm_ftl_cap_exec(FTL_CAP_INIT_FN, &app_gl))
         return -1;
+    core.run_flag |= RUN_APPNVM;
 #endif
     return 0;
 }
@@ -917,12 +922,24 @@ static void nvm_clear_all (uint8_t stop_all)
 {
     struct nvm_ftl *ftl;
     struct nvm_mmgr *mmgr;
+    struct nvm_ftl_cap_gl_fn app_gl;
 
     /* Clean PCIe handler */
     if(core.nvm_pcie && (core.run_flag & RUN_PCIE) && stop_all) {
         core.nvm_pcie->ops->exit();
         core.run_flag ^= RUN_PCIE;
     }
+
+#if FTL_APPNVM
+    /* APPNVM Global Exit */
+    if (core.run_flag & RUN_APPNVM) {
+        app_gl.arg = NULL;
+        app_gl.ftl_id = FTL_ID_APPNVM;
+        app_gl.fn_id = 0;
+        nvm_ftl_cap_exec(FTL_CAP_EXIT_FN, &app_gl);
+        core.run_flag ^= RUN_APPNVM;
+    }
+#endif
 
     /* Clean channels */
     if (core.run_flag & RUN_CH) {
@@ -1106,6 +1123,7 @@ int nvm_init_ctrl (int argc, char **argv, QemuOxCtrl *qemu)
             break;
         case OX_RUN_MODE:
             core.run_flag ^= RUN_TESTS;
+            goto OUT;
            // while(1) { usleep(1); } break;
             return 0;
         default:
