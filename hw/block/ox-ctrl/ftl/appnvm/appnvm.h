@@ -109,6 +109,13 @@ struct app_blk_md {
     uint8_t  *tbl;
 };
 
+struct app_prov_ppas {
+    struct app_channel  **ch;
+    struct nvm_ppa_addr *ppa;
+    uint16_t            nppas;
+    uint16_t            nch;
+};
+
 struct app_ch_flags {
     uint8_t             active;
     uint8_t             need_gc;
@@ -151,10 +158,11 @@ typedef void (app_ch_prov_exit) (struct app_channel *);
 typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
 typedef int  (app_ch_prov_get_ppas)(struct app_channel *, struct nvm_ppa_addr *,
                                                                      uint16_t);
+
 typedef int  (app_gl_prov_init) (void);
 typedef void (app_gl_prov_exit) (void);
-typedef struct nvm_ppa_addr *(app_gl_prov_get_ppa_list) (uint16_t);
-typedef void (app_gl_prov_free_ppa_list) (struct nvm_ppa_addr *);
+typedef struct app_prov_ppas *(app_gl_prov_get_ppa_list) (uint32_t);
+typedef void (app_gl_prov_free_ppa_list) (struct app_prov_ppas *);
 
 typedef int     (app_flags_init) (void);
 typedef void    (app_flags_exit) (void);

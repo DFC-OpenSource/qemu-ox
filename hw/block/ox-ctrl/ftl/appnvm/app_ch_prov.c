@@ -52,6 +52,7 @@ struct ch_prov {
     struct ch_prov_lun  *luns;
     struct ch_prov_blk  **prov_vblks;
     struct ch_prov_line line;
+    pthread_mutex_t     ch_mutex;
 };
 
 static struct ch_prov_blk *ch_prov_blk_rand (struct app_channel *lch,
@@ -295,7 +296,6 @@ static struct ch_prov_blk *ch_prov_blk_get (struct app_channel *lch, int lun)
     struct ch_prov_lun *p_lun = &prov->luns[lun];
 
 NEXT:
-    pthread_mutex_lock(&(p_lun->l_mutex));
     if (p_lun->nfree_blks > 0) {
         struct ch_prov_blk *vblk = CIRCLEQ_FIRST(&p_lun->free_blk_head);
 
@@ -306,8 +306,6 @@ NEXT:
         p_lun->nfree_blks--;
         p_lun->nused_blks++;
         p_lun->nopen_blks++;
-
-        pthread_mutex_unlock(&(p_lun->l_mutex));
 
         /* Erase the block, if it fails, mark as bad and try next block */
         cmd = malloc (sizeof(struct nvm_mmgr_io_cmd));
@@ -330,12 +328,10 @@ NEXT:
             for (pl = 0; pl < n_pl; pl++)
                 lch->ch->ftl->ops->set_bbtbl (&vblk->addr, NVM_BBT_BAD);
 
-            pthread_mutex_lock(&(p_lun->l_mutex));
             CIRCLEQ_REMOVE(&(p_lun->used_blk_head), vblk, entry);
             TAILQ_REMOVE(&(p_lun->open_blk_head), vblk, open_entry);
             p_lun->nused_blks--;
             p_lun->nopen_blks--;
-            pthread_mutex_unlock(&(p_lun->l_mutex));
 
             goto NEXT;
         }
@@ -357,8 +353,6 @@ NEXT:
         return vblk;
     }
 
-    pthread_mutex_unlock(&(p_lun->l_mutex));
-
     return NULL;
 }
 
@@ -378,19 +372,21 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
     if (vblk->blk_md->flags & APP_BLK_MD_OPEN)
         return -1;
 
+    pthread_mutex_lock(&prov->ch_mutex);
+
     if (vblk->blk_md->flags & APP_BLK_MD_USED)
         vblk->blk_md->flags ^= APP_BLK_MD_USED;
 
     if (vblk->blk_md->flags & APP_BLK_MD_LINE)
         vblk->blk_md->flags ^= APP_BLK_MD_LINE;
 
-    pthread_mutex_lock(&(p_lun->l_mutex));
     CIRCLEQ_REMOVE(&(p_lun->used_blk_head), &prov->prov_vblks[lun][blk], entry);
     CIRCLEQ_INSERT_TAIL(&(p_lun->free_blk_head),
                                            &prov->prov_vblks[lun][blk], entry);
     p_lun->nfree_blks++;
     p_lun->nused_blks--;
-    pthread_mutex_unlock(&(p_lun->l_mutex));
+
+    pthread_mutex_unlock(&prov->ch_mutex);
 
     if (APPNVM_DEBUG) {
         printf("[appnvm (ch_prov): blk PUT: (%d %d %d) - Free: %d,"
@@ -507,9 +503,12 @@ static int ch_prov_init (struct app_channel *lch)
     if (!prov)
         return -1;
 
+    if (pthread_mutex_init(&prov->ch_mutex, NULL))
+        goto FREE_PROV;
+
     lch->ch_prov = prov;
     if (ch_prov_init_luns (lch))
-        goto FREE_PROV;
+        goto MUTEX;
 
     prov->line.current_blk = 0;
     prov->line.vblks = malloc (sizeof (struct ch_prov_blk *) * APP_PROV_LINE);
@@ -531,6 +530,8 @@ FREE_BLKS:
     free (prov->line.vblks);
 FREE_LUNS:
     ch_prov_exit_luns (lch);
+MUTEX:
+    pthread_mutex_destroy (&prov->ch_mutex);
 FREE_PROV:
     free (prov);
     return -1;
@@ -542,6 +543,7 @@ static void ch_prov_exit (struct app_channel *lch)
 
     free (prov->line.vblks);
     ch_prov_exit_luns (lch);
+    pthread_mutex_destroy (&prov->ch_mutex);
     free (prov);
 }
 
@@ -572,6 +574,8 @@ static int ch_prov_get_ppas (struct app_channel *lch, struct nvm_ppa_addr *list,
     /* Check if device is full (no blocks in the line) */
     if (prov->line.nblks < 1)
         return -1;
+
+    pthread_mutex_lock(&prov->ch_mutex);
 
     li = &prov->line.current_blk;
     renew = 0;
@@ -619,12 +623,17 @@ static int ch_prov_get_ppas (struct app_channel *lch, struct nvm_ppa_addr *list,
             renew = 0;
             if (ch_prov_renew_line (lch)) {
                 if (pgs_left > 0)
-                    return -1;
+                    goto FULL;
             }
         }
     }
 
+    pthread_mutex_unlock(&prov->ch_mutex);
     return 0;
+
+FULL:
+    pthread_mutex_unlock(&prov->ch_mutex);
+    return -1;
 }
 
 void ch_prov_register (void) {
