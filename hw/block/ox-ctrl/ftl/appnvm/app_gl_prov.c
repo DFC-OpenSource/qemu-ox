@@ -198,12 +198,16 @@ REDIST:
     if (APPNVM_DEBUG)
         printf ("\n[appnvm (gl_prov): GET - %d ppas]\n", tppas);
 
-    for (int i = 0; i < app_nch; i++) {
-        if (dec_ch[i] != NULL)
-            appnvm_ch_dec_thread(prov_ppa->ch[i]);
+    for (ch_id = 0; ch_id < app_nch; ch_id++) {
+        if (dec_ch[ch_id] != NULL)
+            appnvm_ch_dec_thread(prov_ppa->ch[ch_id]);
+
+        if (tmp_ppa[ch_id].ppa != NULL)
+            free (tmp_ppa[ch_id].ppa);
+
         if (APPNVM_DEBUG)
-            printf (" [appnvm (gl_prov): GET - Ch %d, %d ppas, %d users]\n", i,
-                                     tmp_ppa[i].nch, appnvm_ch_nthreads(ch[i]));
+            printf (" [appnvm (gl_prov): GET - Ch %d, %d ppas, %d users]\n",
+                      ch_id, tmp_ppa[ch_id].nch, appnvm_ch_nthreads(ch[ch_id]));
     }
 
     return prov_ppa;
