@@ -74,23 +74,94 @@ int nvm_register_pcie_handler (struct nvm_pcie *pcie)
     return 0;
 }
 
+static void nvm_calc_print_geo (struct nvm_mmgr_geometry *g)
+{
+    g->sec_per_pl_pg = g->sec_per_pg * g->n_of_planes;
+    g->sec_per_blk = g->sec_per_pl_pg * g->pg_per_blk;
+    g->sec_per_lun = g->sec_per_blk * g->blk_per_lun;
+    g->sec_per_ch = g->sec_per_lun * g->lun_per_ch;
+    g->pg_per_lun = g->pg_per_blk * g->blk_per_lun;
+    g->pg_per_ch = g->pg_per_lun * g->lun_per_ch;
+    g->blk_per_ch = g->blk_per_lun * g->lun_per_ch;
+    g->tot_sec = g->sec_per_ch * g->n_of_ch;
+    g->tot_pg = g->pg_per_ch * g->n_of_ch;
+    g->tot_blk = g->blk_per_ch * g->n_of_ch;
+    g->tot_lun = g->lun_per_ch * g->n_of_ch;
+    g->pl_pg_size = g->pg_size * g->n_of_planes;
+    g->blk_size = g->pl_pg_size * g->pg_per_blk;
+    g->lun_size = g->blk_size * g->blk_per_lun;
+    g->ch_size = g->lun_size * g->lun_per_ch;
+    g->tot_size = g->ch_size * g->n_of_ch;
+    g->pg_oob_sz = g->sec_oob_sz * g->sec_per_pg;
+    g->pl_pg_oob_sz = g->pg_oob_sz * g->n_of_planes;
+    g->blk_oob_sz = g->pl_pg_oob_sz * g->pg_per_blk;
+    g->lun_oob_sz = g->blk_oob_sz * g->blk_per_lun;
+    g->ch_oob_sz = g->lun_oob_sz * g->lun_per_ch;
+    g->tot_oob_sz = g->ch_oob_sz * g->n_of_ch;
+
+    log_info ("   [n_of_planes   = %d]", g->n_of_planes);
+    log_info ("   [n_of_channels = %d]", g->n_of_ch);
+    log_info ("   [sec_per_pg    = %d]", g->sec_per_pg);
+    log_info ("   [sec_per_pl_pg = %d]", g->sec_per_pl_pg);
+    log_info ("   [sec_per_blk   = %d]", g->sec_per_blk);
+    log_info ("   [sec_per_lun   = %d]", g->sec_per_lun);
+    log_info ("   [sec_per_ch    = %d]", g->sec_per_ch);
+    log_info ("   [tot_sec       = %lu]", g->tot_sec);
+    log_info ("   [pg_per_blk    = %d]", g->pg_per_blk);
+    log_info ("   [pg_per_lun    = %d]", g->pg_per_lun);
+    log_info ("   [pg_per_ch     = %d]", g->pg_per_ch);
+    log_info ("   [tot_pg        = %lu]", g->tot_pg);
+    log_info ("   [blk_per_lun   = %d]", g->blk_per_lun);
+    log_info ("   [blk_per_ch    = %d]", g->blk_per_ch);
+    log_info ("   [tot_blk       = %d]", g->tot_blk);
+    log_info ("   [lun_per_ch    = %d]", g->lun_per_ch);
+    log_info ("   [tot_lun       = %d]", g->tot_lun);
+    log_info ("   [page_size     = %d bytes, %d KB]",
+                                                g->pg_size, g->pg_size / 1024);
+    log_info ("   [pl_page_size  = %d bytes, %d KB]",
+                                          g->pl_pg_size, g->pl_pg_size / 1024);
+    log_info ("   [blk_size      = %d bytes, %d MB]",
+                                       g->blk_size, g->blk_size / 1024 / 1024);
+    log_info ("   [lun_size      = %lu bytes, %lu MB]",
+                                       g->lun_size, g->lun_size / 1024 / 1024);
+    log_info ("   [ch_size       = %lu bytes, %lu MB]",
+                                         g->ch_size, g->ch_size / 1024 / 1024);
+    log_info ("   [tot_size      = %lu bytes, %lu GB]",
+                                g->tot_size, g->tot_size / 1024 / 1024 / 1024);
+    log_info ("   [sec_oob_sz    = %d bytes]", g->sec_oob_sz);
+    log_info ("   [pg_oob_sz     = %d bytes]", g->pg_oob_sz);
+    log_info ("   [pl_pg_oob_sz  = %d bytes]", g->pl_pg_oob_sz);
+    log_info ("   [blk_oob_sz    = %d bytes, %d KB]",
+                                          g->blk_oob_sz, g->blk_oob_sz / 1024);
+    log_info ("   [lun_oob_sz    = %d bytes, %d KB]",
+                                          g->lun_oob_sz, g->lun_oob_sz / 1024);
+    log_info ("   [ch_oob_sz     = %lu bytes, %lu KB]",
+                                            g->ch_oob_sz, g->ch_oob_sz / 1024);
+    log_info ("   [tot_oob_sz    = %lu bytes, %lu MB]",
+                                   g->tot_oob_sz, g->tot_oob_sz / 1024 / 1024);
+}
+
 int nvm_register_mmgr (struct nvm_mmgr *mmgr)
 {
+    struct nvm_mmgr_geometry *g = mmgr->geometry;
+
     if (strlen(mmgr->name) > MAX_NAME_SIZE)
         return EMAX_NAME_SIZE;
 
-    mmgr->ch_info = calloc(sizeof(struct nvm_channel),mmgr->geometry->n_of_ch);
+    mmgr->ch_info = calloc(sizeof(struct nvm_channel), g->n_of_ch);
     if (!mmgr->ch_info)
         return EMMGR_REGISTER;
 
-    if (mmgr->ops->get_ch_info(mmgr->ch_info, mmgr->geometry->n_of_ch))
+    if (mmgr->ops->get_ch_info(mmgr->ch_info, g->n_of_ch))
         return EMMGR_REGISTER;
 
     LIST_INSERT_HEAD(&mmgr_head, mmgr, entry);
     core.mmgr_count++;
-    core.nvm_ch_count += mmgr->geometry->n_of_ch;
+    core.nvm_ch_count += g->n_of_ch;
 
-    log_info("  [nvm: Media Manager registered: %s]\n", mmgr->name);
+    log_info("  [nvm: Media Manager registered: %s]]", mmgr->name);
+
+    nvm_calc_print_geo (g);
 
     return 0;
 }

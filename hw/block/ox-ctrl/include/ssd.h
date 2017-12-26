@@ -245,6 +245,30 @@ struct nvm_mmgr_geometry {
     uint8_t     n_of_planes;
     uint32_t    pg_size;
     uint32_t    sec_oob_sz;
+
+    /* calculated values */
+    uint32_t    sec_per_pl_pg;
+    uint32_t    sec_per_blk;
+    uint32_t    sec_per_lun;
+    uint32_t    sec_per_ch;
+    uint32_t    pg_per_lun;
+    uint32_t    pg_per_ch;
+    uint32_t    blk_per_ch;
+    uint64_t    tot_sec;
+    uint64_t    tot_pg;
+    uint32_t    tot_blk;
+    uint32_t    tot_lun;
+    uint32_t    pl_pg_size;
+    uint32_t    blk_size;
+    uint64_t    lun_size;
+    uint64_t    ch_size;
+    uint64_t    tot_size;
+    uint32_t    pg_oob_sz;
+    uint32_t    pl_pg_oob_sz;
+    uint32_t    blk_oob_sz;
+    uint32_t    lun_oob_sz;
+    uint64_t    ch_oob_sz;
+    uint64_t    tot_oob_sz;
 };
 
 struct nvm_mmgr {
