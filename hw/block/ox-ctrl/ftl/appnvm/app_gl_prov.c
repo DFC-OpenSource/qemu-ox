@@ -2,7 +2,6 @@
  *
  * Copyright (C) 2016, IT University of Copenhagen. All rights reserved.
  * Written by          Ivan Luiz Picoli <ivpi@itu.dk>
- * LUN provisioning by Carla Villegas   <carv@itu.dk>
  *
  * Funding support provided by CAPES Foundation, Ministry of Education
  * of Brazil, Brasilia - DF 70040-020, Brazil.

@@ -55,7 +55,7 @@ static int blk_md_load (struct app_channel *lch)
         goto ERR;
     }
 
-    pg = app_blk_current_page (lch, io, md_pgs);
+    pg = app_blk_current_page (lch, io, lch->meta_blk, md_pgs);
     if (pg < 0)
         goto ERR;
 
@@ -109,7 +109,7 @@ static int blk_md_flush (struct app_channel *lch)
         goto ERR;
     }
 
-    pg = app_blk_current_page (lch, io, md_pgs);
+    pg = app_blk_current_page (lch, io, lch->meta_blk, md_pgs);
     if (pg < 0)
         goto ERR;
 

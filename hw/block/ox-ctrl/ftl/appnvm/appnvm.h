@@ -20,8 +20,8 @@
 
 #define APP_RSV_BBT_OFF    0
 #define APP_RSV_META_OFF   1
-#define APP_RSV_L2P_OFF    2
-#define APP_RSV_BLK_COUNT  APP_RSV_BBT_OFF + APP_RSV_META_OFF + APP_RSV_L2P_OFF;
+#define APP_RSV_MAP_OFF    2
+#define APP_RSV_BLK_COUNT  APP_RSV_BBT_OFF + APP_RSV_META_OFF + APP_RSV_MAP_OFF;
 
 #define APP_MAGIC          0x3c
 
@@ -99,7 +99,7 @@ struct app_blk_md_entry {
     uint32_t                erase_count;
     uint32_t                current_pg;
     uint8_t                 pg_state[64]; /* maximum of 512 pages per blk */
-} __attribute__((packed)) ;   /* 82 bytes per entry */
+} __attribute__((packed));   /* 82 bytes per entry */
 
 struct app_blk_md {
     uint8_t  magic;
@@ -125,6 +125,19 @@ struct app_ch_flags {
     pthread_spinlock_t  busy_spin;
 };
 
+struct app_map_entry {
+    uint64_t lba;
+    uint64_t ppa;
+} __attribute__((packed)); /* 16 bytes entry */
+
+struct app_map_md {
+    uint8_t  magic;
+    uint32_t entries;
+    size_t   entry_sz;
+    /* This struct is stored on NVM up to this point, *tbl is not stored */
+    uint8_t  *tbl;
+};
+
 struct app_channel {
     uint16_t                app_ch_id;
     struct app_ch_flags     flags;
@@ -132,9 +145,10 @@ struct app_channel {
     struct app_bbtbl        *bbtbl;
     struct app_blk_md       *blk_md;
     void                    *ch_prov;
+    struct app_map_md       *map_md;
     uint16_t                bbt_blk;  /* Rsvd blk ID for bad block table */
     uint16_t                meta_blk; /* Rsvd blk ID for block metadata */
-    uint16_t                l2p_blk;  /* Rsvd blk ID for l2p metadata */
+    uint16_t                map_blk;  /* Rsvd blk ID for mapping metadata */
     LIST_ENTRY(app_channel) entry;
 };
 
@@ -169,6 +183,16 @@ typedef void    (app_flags_exit) (void);
 typedef void    (app_flags_set) (uint16_t flag_id, uint16_t offset);
 typedef void    (app_flags_unset) (uint16_t flag_id, uint16_t offset);
 typedef uint8_t (app_flags_check) (uint16_t flag_id, uint16_t offset);
+
+typedef int  (app_ch_map_create) (struct app_channel *);
+typedef int  (app_ch_map_load) (struct app_channel *);
+typedef int  (app_ch_map_flush) (struct app_channel *);
+typedef struct app_map_entry *(app_ch_map_get) (struct app_channel *, uint32_t);
+
+typedef int         (app_map_init) (void);
+typedef void        (app_map_exit) (void);
+typedef int         (app_map_upsert) (uint64_t lba, uint64_t ppa);
+typedef uint64_t    (app_map_read) (uint64_t lba);
 
 struct app_channels {
     app_ch_init         *init_fn;
@@ -213,6 +237,20 @@ struct app_flags {
     app_flags_check         *check_fn;
 };
 
+struct app_ch_map {
+    app_ch_map_create   *create_fn;
+    app_ch_map_load     *load_fn;
+    app_ch_map_flush    *flush_fn;
+    app_ch_map_get      *get_fn;
+};
+
+struct app_gl_map {
+    app_map_init    *init_fn;
+    app_map_exit    *exit_fn;
+    app_map_upsert  *upsert_fn;
+    app_map_read    *read_fn;
+};
+
 struct app_global {
     struct app_channels     channels;
     struct app_global_bbt   bbt;
@@ -220,6 +258,8 @@ struct app_global {
     struct app_ch_prov      ch_prov;
     struct app_gl_prov      gl_prov;
     struct app_flags        flags;
+    struct app_ch_map       ch_map;
+    struct app_gl_map       gl_map;
 };
 
 /* Inline Functions */
@@ -299,7 +339,7 @@ void    app_free_pg_io (struct app_io_data *data);
 int     app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                      void **buf_vec, uint16_t blk, uint16_t pg);
 int     app_blk_current_page (struct app_channel *lch,
-                                       struct app_io_data *io, uint16_t offset);
+                      struct app_io_data *io, uint16_t blk_id, uint16_t offset);
 int     app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
         uint16_t pgs, uint16_t start_pg,  uint16_t ent_per_pg,
         uint32_t ent_left, size_t entry_sz, uint16_t blk_id, uint8_t direction);
@@ -312,5 +352,7 @@ void blk_md_register (void);
 void ch_prov_register (void);
 void gl_prov_register (void);
 void flags_register (void);
+void ch_map_register (void);
+void gl_map_register (void);
 
 #endif /* APP_H */

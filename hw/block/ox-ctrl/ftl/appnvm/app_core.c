@@ -62,7 +62,7 @@ void app_free_pg_io (struct app_io_data *data)
 }
 
 int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
-                                                               uint16_t offset)
+                                              uint16_t blk_id, uint16_t offset)
 {
     int i, pg, ret, fr = 0;
     struct app_magic oob;
@@ -83,8 +83,7 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
     pg = 0;
     do {
         memset (io->buf, 0, io->buf_sz);
-        ret = app_io_rsv_blk (lch, MMGR_READ_PG, (void **) buf_vec,
-                                                            lch->meta_blk, pg);
+        ret = app_io_rsv_blk (lch, MMGR_READ_PG, (void **) buf_vec, blk_id, pg);
 
         /* get info from OOB area in plane 0 */
         memcpy(&oob, io->buf + io->pg_sz, sizeof(struct app_magic));
@@ -393,6 +392,8 @@ int ftl_appnvm_init (void)
     ch_prov_register ();
     flags_register ();
     gl_prov_register ();
+    ch_map_register ();
+    gl_map_register ();
 
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;

@@ -2,7 +2,6 @@
  *
  * Copyright (C) 2016, IT University of Copenhagen. All rights reserved.
  * Written by          Ivan Luiz Picoli <ivpi@itu.dk>
- * LUN provisioning by Carla Villegas   <carv@itu.dk>
  *
  * Funding support provided by CAPES Foundation, Ministry of Education
  * of Brazil, Brasilia - DF 70040-020, Brazil.
@@ -53,7 +52,7 @@ static int app_reserve_blks (struct app_channel *lch)
     /* Set reserved blocks */
     lch->bbt_blk  = ch->mmgr_rsv + APP_RSV_BBT_OFF;
     lch->meta_blk = ch->mmgr_rsv + APP_RSV_META_OFF;
-    lch->l2p_blk  = ch->mmgr_rsv + APP_RSV_L2P_OFF;
+    lch->map_blk  = ch->mmgr_rsv + APP_RSV_MAP_OFF;
 
     return 0;
 }
@@ -94,7 +93,7 @@ static int app_init_bbt (struct app_channel *lch)
         if (ret) goto ERR;
     }
 
-    log_info("    [appnvm: Bad Block Table started. Ch %d]\n", ch->ch_id);
+    log_info("    [appnvm: Bad block table started. Ch %d]\n", ch->ch_id);
 
     return 0;
 
@@ -102,7 +101,16 @@ ERR:
     free(lch->bbtbl->tbl);
 FREE_BBTBL:
     free(lch->bbtbl);
+
+    log_err("[appnvm ERR: Ch %d -> Not possible to read/create bad block "
+                                                        "table.]\n", ch->ch_id);
     return -1;
+}
+
+static void app_exit_bbt (struct app_channel *lch)
+{
+    free(lch->bbtbl->tbl);
+    free(lch->bbtbl);
 }
 
 static int app_init_blk_md (struct app_channel *lch)
@@ -140,15 +148,84 @@ static int app_init_blk_md (struct app_channel *lch)
         if (ret) goto ERR;
     }
 
-    log_info("    [appnvm: Block Metadata started. Ch %d]\n", ch->ch_id);
+    log_info("    [appnvm: Block metadata started. Ch %d]\n", ch->ch_id);
 
     return 0;
 
 ERR:
-    free(lch->blk_md->tbl);
+    free (lch->blk_md->tbl);
 FREE_MD:
-    free(lch->blk_md);
+    free (lch->blk_md);
+
+    log_err("[appnvm ERR: Ch %d -> Not possible to read/create block metadata "
+                                                        "table.]\n", ch->ch_id);
     return -1;
+}
+
+static void app_exit_blk_md (struct app_channel *lch)
+{
+    free (lch->blk_md->tbl);
+    free (lch->blk_md);
+}
+
+static int app_init_map (struct app_channel *lch)
+{
+    int ret = -1;
+    uint32_t ch_map_md_ent;
+    uint64_t ch_map_sz;
+    struct app_map_md *md;
+    struct nvm_channel *ch = lch->ch;
+    struct nvm_mmgr_geometry *g = ch->geometry;
+
+    /* sector granularity mapping table */
+    ch_map_sz = g->sec_per_ch * sizeof(struct app_map_entry);
+
+    /* each map_md entry maps to a mapping table physical page */
+    ch_map_md_ent = ch_map_sz / g->pl_pg_size;
+
+    lch->map_md = malloc (sizeof(struct app_map_md));
+    if (!lch->map_md)
+        return -1;
+
+    md = lch->map_md;
+    md->entry_sz = sizeof(struct app_map_entry);
+    md->tbl = malloc (md->entry_sz * ch_map_md_ent);
+    if (!md->tbl)
+        goto FREE_MD;
+
+    memset (md->tbl, 0, md->entry_sz * ch_map_md_ent);
+    md->magic = 0;
+    md->entries = ch_map_md_ent;
+
+    ret = appnvm()->ch_map.load_fn (lch);
+    if (ret) goto ERR;
+
+    /* create and flush mapping metadata table if it does not exist */
+    if (md->magic == APP_MAGIC) {
+        ret = appnvm()->ch_map.create_fn (lch);
+        if (ret) goto ERR;
+        ret = appnvm()->ch_map.flush_fn (lch);
+        if (ret) goto ERR;
+    }
+
+    log_info("    [appnvm: Mapping metadata started. Ch %d]\n", ch->ch_id);
+
+    return 0;
+
+ERR:
+    free (lch->map_md->tbl);
+FREE_MD:
+    free (lch->map_md);
+
+    log_err("[appnvm ERR: Ch %d -> Not possible to read/create mapping "
+                                              "metadata table.]\n", ch->ch_id);
+    return -1;
+}
+
+static void app_exit_map (struct app_channel *lch)
+{
+    free (lch->map_md->tbl);
+    free (lch->map_md);
 }
 
 static int channels_init (struct nvm_channel *ch, uint16_t id)
@@ -171,27 +248,49 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
         goto FREE_LCH;
 
     if (app_init_blk_md (lch))
-        goto FREE_LCH;
+        goto FREE_BBT;
 
     if (appnvm()->ch_prov.init_fn (lch))
-        goto FREE_LCH;
+        goto FREE_BLK_MD;
+
+    if (app_init_map (lch))
+        goto EXIT_CH_PROV;
 
     log_info("    [appnvm: channel %d started with %d bad blocks.]\n",ch->ch_id,
                                                           lch->bbtbl->bb_count);
     return 0;
 
+EXIT_CH_PROV:
+    appnvm()->ch_prov.exit_fn (lch);
+FREE_BLK_MD:
+    app_exit_blk_md (lch);
+FREE_BBT:
+    app_exit_bbt (lch);
 FREE_LCH:
     LIST_REMOVE (lch, entry);
     free(lch);
-    log_err("[appnvm ERR: Ch %d -> Not possible to read/create bad block "
-                                                        "table.]\n", ch->ch_id);
+
     return EMEM;
 }
 
 static void channels_exit (struct app_channel *lch)
 {
     int ret, retry;
-    
+
+    retry = 0;
+    do {
+        retry++;
+        ret = appnvm()->ch_map.flush_fn (lch);
+    } while (ret && retry < APPNVM_FLUSH_RETRY);
+
+    /* TODO: Recover from last checkpoint (make a checkpoint) */
+    if (ret)
+        log_err(" [appnvm: ERROR. Mapping metadata not flushed to NVM. "
+                                          "Channel %d]", lch->ch->ch_id);
+    else
+        log_info(" [appnvm: Mapping metadata persisted into NVM. "
+                                          "Channel %d]", lch->ch->ch_id);
+
     retry = 0;
     do {
         retry++;
@@ -206,12 +305,11 @@ static void channels_exit (struct app_channel *lch)
         log_info(" [appnvm: Block metadata persisted into NVM. "
                                           "Channel %d]", lch->ch->ch_id);
 
+    app_exit_map (lch);
     appnvm()->ch_prov.exit_fn (lch);
-    free(lch->blk_md->tbl);
-    free(lch->blk_md);
-    free(lch->bbtbl->tbl);
-    free(lch->bbtbl);
-     
+    app_exit_blk_md (lch);
+    app_exit_bbt (lch);
+
     LIST_REMOVE (lch, entry);
     free(lch);
 }
