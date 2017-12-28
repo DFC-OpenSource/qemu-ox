@@ -165,13 +165,7 @@ static int map_evict_pg_cache (struct map_cache *cache)
         /* Cache entry PPA is set after the write completes */
     }
 
-    struct nvm_ppa_addr a;
-    memcpy (&a, &cache_ent->ppa, sizeof (uint64_t));
-
     cache_ent->md_entry->ppa = cache_ent->ppa.ppa;
-
-    memcpy (&a, &cache_ent->md_entry->ppa, sizeof (uint64_t));
-
     cache_ent->ppa.ppa = 0;
     cache_ent->md_entry = NULL;
 
