@@ -28,6 +28,9 @@
 #define APP_TRANS_TO_NVM    0
 #define APP_TRANS_FROM_NVM  1
 
+#define APP_IO_NORMAL   0
+#define APP_IO_RESERVED 1 /* Used for FTL reerved blocks */
+
 #define APPNVM_FLUSH_RETRY  3
 
 #define APPNVM_DEBUG       1
@@ -134,8 +137,8 @@ struct app_map_md {
     uint8_t  magic;
     uint32_t entries;
     size_t   entry_sz;
-    /* This struct is stored on NVM up to this point, *tbl is not stored */
     uint8_t  *tbl;
+    pthread_mutex_t *entry_mutex;
 };
 
 struct app_channel {
@@ -189,10 +192,10 @@ typedef int  (app_ch_map_load) (struct app_channel *);
 typedef int  (app_ch_map_flush) (struct app_channel *);
 typedef struct app_map_entry *(app_ch_map_get) (struct app_channel *, uint32_t);
 
-typedef int         (app_map_init) (void);
-typedef void        (app_map_exit) (void);
-typedef int         (app_map_upsert) (uint64_t lba, uint64_t ppa);
-typedef uint64_t    (app_map_read) (uint64_t lba);
+typedef int         (app_gl_map_init) (void);
+typedef void        (app_gl_map_exit) (void);
+typedef int         (app_gl_map_upsert) (uint64_t lba, uint64_t ppa);
+typedef uint64_t    (app_gl_map_read) (uint64_t lba);
 
 struct app_channels {
     app_ch_init         *init_fn;
@@ -245,10 +248,10 @@ struct app_ch_map {
 };
 
 struct app_gl_map {
-    app_map_init    *init_fn;
-    app_map_exit    *exit_fn;
-    app_map_upsert  *upsert_fn;
-    app_map_read    *read_fn;
+    app_gl_map_init    *init_fn;
+    app_gl_map_exit    *exit_fn;
+    app_gl_map_upsert  *upsert_fn;
+    app_gl_map_read    *read_fn;
 };
 
 struct app_global {
@@ -338,11 +341,13 @@ struct app_io_data *app_alloc_pg_io (struct app_channel *lch);
 void    app_free_pg_io (struct app_io_data *data);
 int     app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                      void **buf_vec, uint16_t blk, uint16_t pg);
+int     app_pg_io (struct app_channel *lch, uint8_t cmdtype,
+                                      void **buf_vec, struct nvm_ppa_addr *ppa);
 int     app_blk_current_page (struct app_channel *lch,
                       struct app_io_data *io, uint16_t blk_id, uint16_t offset);
-int     app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
-        uint16_t pgs, uint16_t start_pg,  uint16_t ent_per_pg,
-        uint32_t ent_left, size_t entry_sz, uint16_t blk_id, uint8_t direction);
+int     app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
+        uint8_t *user_buf, uint16_t pgs, uint16_t ent_per_pg, uint32_t ent_left,
+        size_t entry_sz, uint8_t direction, uint8_t reserved);
 int     app_get_ch_list (struct app_channel **list);
 
 struct app_global *appnvm (void);

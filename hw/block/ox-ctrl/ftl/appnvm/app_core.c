@@ -100,44 +100,60 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
     return (!ret) ? pg : -1;
 }
 
+inline static int app_pg_io_switch (struct app_channel *lch, uint8_t cmdtype,
+                    void **buf_vec, struct nvm_ppa_addr *ppa, uint8_t type)
+{
+    switch (type) {
+        case APP_IO_NORMAL:
+            return app_pg_io (lch, cmdtype, buf_vec, ppa);
+        case APP_IO_RESERVED:
+            return app_io_rsv_blk(lch, cmdtype, buf_vec, ppa->g.blk, ppa->g.pg);
+        default:
+            return -1;
+    }
+}
+
 /**
- *  Transfers a table of user specific entries to/from a NVM reserved block
+ *  Transfers a table of user specific entries to/from a NVM unique block
  *  This function mount/unmount the multi-plane I/O buffers to a flat table
  *
  *  The table can cross multiple pages in the block
  *  For now, the maximum table size is the flash block
  *
  * @param io - struct created by alloc_alloc_pg_io
+ * @param ppa - lun, block and first page number
  * @param user_buf - table buffer to be transfered
  * @param pgs - number of flash pages the table crosses (multi-plane pages)
- * @param start_pg - first page to be written
  * @param ent_per_pg - number of entries per flash page (multi-plane pages)
  * @param ent_left - number of entries to be transfered
  * @param entry_sz - size of an entry
- * @param blk_id - reserved block ID (for now, in LUN 0)
  * @param direction - APP_TRANS_FROM_NVM or APP_TRANS_TO_NVM
+ * @param reserved - APP_IO_NORMAL or APP_IO_RESERVED
  * @return 0 on success, -1 on failure
  */
-int app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
-        uint16_t pgs, uint16_t start_pg,  uint16_t ent_per_pg,
-        uint32_t ent_left, size_t entry_sz, uint16_t blk_id, uint8_t direction)
+int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
+        uint8_t *user_buf, uint16_t pgs, uint16_t ent_per_pg, uint32_t ent_left,
+        size_t entry_sz, uint8_t direction, uint8_t reserved)
 {
-    int i, pl;
+    uint32_t i, pl, start_pg;
     size_t trf_sz, pg_ent_sz;
     uint8_t *from, *to;
+    struct nvm_ppa_addr ppa_io;
 
     uint8_t *buf_vec[io->n_pl];
     for (i = 0; i < io->n_pl; i++)
         buf_vec[i] = io->buf + i * (io->buf_sz / io->n_pl);
 
     pg_ent_sz = ent_per_pg * entry_sz;
+    memcpy (&ppa_io, ppa, sizeof(struct nvm_ppa_addr));
+    start_pg = ppa_io.g.pg;
 
     /* Transfer page by page from/to NVM */
     for (i = 0; i < pgs; i++) {
-
+        ppa_io.g.pg = start_pg + i;
         if (direction == APP_TRANS_FROM_NVM)
-            if (app_io_rsv_blk (io->lch, MMGR_READ_PG, (void **) buf_vec,
-                                                        blk_id, start_pg + i))
+            if (app_pg_io_switch (io->lch, MMGR_READ_PG, (void **) buf_vec,
+                                                            &ppa_io, reserved))
                 return -1;
 
         /* Copy page entries from/to I/O buffer */
@@ -164,12 +180,42 @@ int app_meta_transfer (struct app_io_data *io, uint8_t *user_buf,
         }
 
         if (direction == APP_TRANS_TO_NVM)
-            if (app_io_rsv_blk (io->lch, MMGR_WRITE_PG, (void **) buf_vec,
-                                                        blk_id, start_pg + i))
+            if (app_pg_io_switch (io->lch, MMGR_WRITE_PG, (void **) buf_vec,
+                                                            &ppa_io, reserved))
                 return -1;
     }
 
     return 0;
+}
+
+int app_pg_io (struct app_channel *lch, uint8_t cmdtype,
+                                      void **buf_vec, struct nvm_ppa_addr *ppa)
+{
+    int pl, ret = -1;
+    void *buf = NULL;
+    struct nvm_channel *ch = lch->ch;
+    struct nvm_mmgr_io_cmd *cmd = malloc(sizeof(struct nvm_mmgr_io_cmd));
+    if (!cmd)
+        return EMEM;
+
+    for (pl = 0; pl < ch->geometry->n_of_planes; pl++) {
+        memset (cmd, 0, sizeof (struct nvm_mmgr_io_cmd));
+        cmd->ppa.g.blk = ppa->g.blk;
+        cmd->ppa.g.pl = pl;
+        cmd->ppa.g.ch = ch->ch_mmgr_id;
+        cmd->ppa.g.lun = ppa->g.lun;
+        cmd->ppa.g.pg = ppa->g.pg;
+
+        if (cmdtype != MMGR_ERASE_BLK)
+            buf = buf_vec[pl];
+
+        ret = nvm_submit_sync_io (ch, cmd, buf, cmdtype);
+        if (ret)
+            break;
+    }
+    free(cmd);
+
+    return ret;
 }
 
 int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
@@ -187,7 +233,10 @@ int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
         cmd->ppa.g.blk = blk;
         cmd->ppa.g.pl = pl;
         cmd->ppa.g.ch = ch->ch_mmgr_id;
+
+        /* TODO: RAID 1 among all LUNs in the channel */
         cmd->ppa.g.lun = 0;
+
         cmd->ppa.g.pg = pg;
 
         if (cmdtype != MMGR_ERASE_BLK)
@@ -324,8 +373,15 @@ static int app_global_init (void)
         goto EXIT_FLAGS;
     }
 
+    if (appnvm()->gl_map.init_fn ()) {
+        log_err ("[appnvm: Global Mapping NOT started.\n");
+        goto EXIT_GL_PROV;
+    }
+
     return 0;
 
+EXIT_GL_PROV:
+    appnvm()->gl_prov.exit_fn ();
 EXIT_FLAGS:
     appnvm()->flags.exit_fn ();
     return -1;
@@ -333,6 +389,7 @@ EXIT_FLAGS:
 
 static void app_global_exit (void)
 {
+    appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
     appnvm()->flags.exit_fn ();
 }

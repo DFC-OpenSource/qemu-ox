@@ -138,7 +138,8 @@ static int ch_prov_list_create(struct app_channel *lch, int lun)
     struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
 
     addr.ppa = 0x0;
-    addr.g.ch = lch->ch->ch_mmgr_id;
+    addr.g.ch = lch->ch->ch_id;
+
     addr.g.lun = lun;
     prov->luns[lun].addr.ppa = addr.ppa;
     nblk = lch->ch->geometry->blk_per_lun;

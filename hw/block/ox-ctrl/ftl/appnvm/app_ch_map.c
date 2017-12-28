@@ -36,6 +36,7 @@ static int ch_map_load (struct app_channel *lch)
 {
     int pg;
     struct app_map_md *md = lch->map_md;
+    struct nvm_ppa_addr ppa;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -69,8 +70,12 @@ static int ch_map_load (struct app_channel *lch)
 
         /* load mapping metadata table from nvm */
         pg -= md_pgs;
-        if (app_meta_transfer (io, md->tbl, md_pgs, pg, ent_per_pg, md->entries,
-            sizeof(struct app_map_entry), lch->map_blk, APP_TRANS_FROM_NVM))
+        ppa.g.pg = pg;
+        ppa.g.blk = lch->map_blk;
+
+        if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
+                            md->entries, sizeof(struct app_map_entry),
+                            APP_TRANS_FROM_NVM, APP_IO_RESERVED))
                 goto ERR;
     }
 
@@ -89,6 +94,7 @@ static int ch_map_flush (struct app_channel *lch)
 {
     int pg;
     struct app_map_md *md = lch->map_md;
+    struct nvm_ppa_addr ppa;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -123,8 +129,12 @@ static int ch_map_flush (struct app_channel *lch)
     memcpy (&io->buf[io->pg_sz], md, sizeof(struct app_map_md));
 
     /* flush the mapping metadata table to nvm */
-    if (app_meta_transfer (io, md->tbl, md_pgs, pg, ent_per_pg, md->entries,
-                sizeof(struct app_map_entry), lch->map_blk, APP_TRANS_TO_NVM))
+    ppa.g.pg = pg;
+    ppa.g.blk = lch->map_blk;
+
+    if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
+                            md->entries, sizeof(struct app_map_entry),
+                            APP_TRANS_TO_NVM, APP_IO_RESERVED))
         goto ERR;
 
     app_free_pg_io(io);
@@ -137,7 +147,8 @@ ERR:
 
 static struct app_map_entry *ch_map_get (struct app_channel *lch, uint32_t off)
 {
-    return ((struct app_map_entry *) lch->map_md->tbl) + off;
+    return (off >= lch->map_md->entries) ? NULL :
+                             ((struct app_map_entry *) lch->map_md->tbl) + off;
 }
 
 void ch_map_register (void) {

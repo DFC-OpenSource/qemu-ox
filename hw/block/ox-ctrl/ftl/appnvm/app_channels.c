@@ -171,7 +171,7 @@ static void app_exit_blk_md (struct app_channel *lch)
 static int app_init_map (struct app_channel *lch)
 {
     int ret = -1;
-    uint32_t ch_map_md_ent;
+    uint32_t ch_map_md_ent, ent_i;
     uint64_t ch_map_sz;
     struct app_map_md *md;
     struct nvm_channel *ch = lch->ch;
@@ -198,21 +198,37 @@ static int app_init_map (struct app_channel *lch)
     md->entries = ch_map_md_ent;
 
     ret = appnvm()->ch_map.load_fn (lch);
-    if (ret) goto ERR;
+    if (ret) goto FREE_TBL;
 
     /* create and flush mapping metadata table if it does not exist */
     if (md->magic == APP_MAGIC) {
         ret = appnvm()->ch_map.create_fn (lch);
-        if (ret) goto ERR;
+        if (ret) goto FREE_TBL;
         ret = appnvm()->ch_map.flush_fn (lch);
-        if (ret) goto ERR;
+        if (ret) goto FREE_TBL;
     }
+
+    md->entry_mutex = malloc (sizeof(pthread_mutex_t) * md->entries);
+    if (!md->entry_mutex)
+        goto FREE_TBL;
+
+    for (ent_i = 0; ent_i < md->entries; ent_i++) {
+        if (pthread_mutex_init (&md->entry_mutex[ent_i], NULL))
+            goto ENT_MUTEX;
+    }
+
 
     log_info("    [appnvm: Mapping metadata started. Ch %d]\n", ch->ch_id);
 
     return 0;
 
-ERR:
+ENT_MUTEX:
+    while (ent_i) {
+        ent_i--;
+        pthread_mutex_destroy (&md->entry_mutex[ent_i]);
+    }
+    free (md->entry_mutex);
+FREE_TBL:
     free (lch->map_md->tbl);
 FREE_MD:
     free (lch->map_md);
@@ -224,6 +240,14 @@ FREE_MD:
 
 static void app_exit_map (struct app_channel *lch)
 {
+    uint32_t ent_i = lch->map_md->entries;
+
+    while (ent_i) {
+        ent_i--;
+        pthread_mutex_destroy (&lch->map_md->entry_mutex[ent_i]);
+    }
+
+    free (lch->map_md->entry_mutex);
     free (lch->map_md->tbl);
     free (lch->map_md);
 }
@@ -327,13 +351,14 @@ static struct app_channel *channels_get(uint16_t ch_id)
 
 static int channels_get_list (struct app_channel **list, uint16_t nch)
 {
-    int n = 0;
+    int n = 0, i = nch - 1;
     struct app_channel *lch;
 
     LIST_FOREACH(lch, &app_ch_head, entry){
-        if (n >= nch)
+        if (i < 0)
             break;
-        list[n] = lch;
+        list[i] = lch;
+        i--;
         n++;
     }
 

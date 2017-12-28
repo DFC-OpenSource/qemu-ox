@@ -37,6 +37,7 @@ static int blk_md_load (struct app_channel *lch)
 {
     int pg;
     struct app_blk_md *md = lch->blk_md;
+    struct nvm_ppa_addr ppa;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -71,8 +72,12 @@ static int blk_md_load (struct app_channel *lch)
 
         /* load block metadata table from nvm */
         pg -= md_pgs;
-        if (app_meta_transfer (io, md->tbl, md_pgs, pg, ent_per_pg, md->entries,
-            sizeof(struct app_blk_md_entry), lch->meta_blk, APP_TRANS_FROM_NVM))
+        ppa.g.pg = pg;
+        ppa.g.blk = lch->meta_blk;
+        
+        if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
+                            md->entries, sizeof(struct app_blk_md_entry),
+                            APP_TRANS_FROM_NVM, APP_IO_RESERVED))
                 goto ERR;
     }
 
@@ -91,6 +96,7 @@ static int blk_md_flush (struct app_channel *lch)
 {
     int pg;
     struct app_blk_md *md = lch->blk_md;
+    struct nvm_ppa_addr ppa;
 
     struct app_io_data *io = app_alloc_pg_io(lch);
     if (io == NULL)
@@ -126,8 +132,12 @@ static int blk_md_flush (struct app_channel *lch)
     memcpy (&io->buf[io->pg_sz], md, sizeof(struct app_blk_md));
 
     /* flush the block metadata table to nvm */
-    if (app_meta_transfer (io, md->tbl, md_pgs, pg, ent_per_pg, md->entries,
-            sizeof(struct app_blk_md_entry), lch->meta_blk, APP_TRANS_TO_NVM))
+    ppa.g.pg = pg;
+    ppa.g.blk = lch->meta_blk;
+    
+    if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
+                            md->entries, sizeof(struct app_blk_md_entry),
+                            APP_TRANS_TO_NVM, APP_IO_RESERVED))
         goto ERR;
 
     app_free_pg_io(io);

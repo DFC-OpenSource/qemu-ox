@@ -91,6 +91,12 @@
         ((tvs).tv_sec*(uint64_t)1000000+(tvs).tv_usec);                 \
 } while ( 0 )
 
+#undef	MAX
+#define MAX(a, b)  (((a) > (b)) ? (a) : (b))
+
+#undef	MIN
+#define MIN(a, b)  (((a) < (b)) ? (a) : (b))
+
 struct nvm_ppa_addr {
     /* Generic structure for all addresses */
     union {
