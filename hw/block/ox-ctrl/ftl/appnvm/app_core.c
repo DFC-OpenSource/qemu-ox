@@ -375,14 +375,9 @@ static void app_exit (void)
 
 static int app_global_init (void)
 {
-    if (appnvm()->flags.init_fn ()) {
-        log_err ("[appnvm: Flags NOT started.\n");
-        return -1;
-    }
-
     if (appnvm()->gl_prov.init_fn ()) {
         log_err ("[appnvm: Global Provisioning NOT started.\n");
-        goto EXIT_FLAGS;
+        return -1;
     }
 
     if (appnvm()->gl_map.init_fn ()) {
@@ -394,8 +389,6 @@ static int app_global_init (void)
 
 EXIT_GL_PROV:
     appnvm()->gl_prov.exit_fn ();
-EXIT_FLAGS:
-    appnvm()->flags.exit_fn ();
     return -1;
 }
 
@@ -403,7 +396,6 @@ static void app_global_exit (void)
 {
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
-    appnvm()->flags.exit_fn ();
 }
 
 static int app_init_fn (uint16_t fn_id, void *arg)
@@ -459,7 +451,6 @@ int ftl_appnvm_init (void)
     bbt_byte_register ();
     blk_md_register ();
     ch_prov_register ();
-    flags_register ();
     gl_prov_register ();
     ch_map_register ();
     gl_map_register ();

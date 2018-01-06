@@ -25,7 +25,6 @@ common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_channels.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_bbtbl.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_blk_md.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_ch_prov.o
-common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_flags.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_gl_prov.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_ch_map.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_gl_map.o

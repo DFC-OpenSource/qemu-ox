@@ -1,12 +1,24 @@
-/* OX: OpenChannel NVM Express SSD Controller
+/* OX: Open-Channel NVM Express SSD Controller
+ *  - AppNVM Flash Translation Layer (Header definition and interfaces)
  *
- * Copyright (C) 2016, IT University of Copenhagen. All rights reserved.
+ * Copyright 2018 IT University of Copenhagen.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
  * Written by Ivan Luiz Picoli <ivpi@itu.dk>
  *
- * Funding support provided by CAPES Foundation, Ministry of Education
+ * Partially supported by CAPES Foundation, Ministry of Education
  * of Brazil, Brasilia - DF 70040-020, Brazil.
- *
- * This code is licensed under the GNU GPL v2 or later.
  */
 
 #ifndef APPNVM_H
@@ -356,7 +368,6 @@ void bbt_byte_register (void);
 void blk_md_register (void);
 void ch_prov_register (void);
 void gl_prov_register (void);
-void flags_register (void);
 void ch_map_register (void);
 void gl_map_register (void);
 
