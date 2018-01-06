@@ -18,7 +18,7 @@
 #include <sys/queue.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#define MAP_BUF_CH_PGS  10       /* 4 MB per channel */
+#define MAP_BUF_CH_PGS  10        /* 4 MB per channel */
 #define MAP_BUF_PG_SZ   32 * 1024 /* 32 KB */
 
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
@@ -30,6 +30,7 @@ struct map_cache_entry {
     struct nvm_ppa_addr         ppa;    /* Stores the PPA while pg is cached */
     struct app_map_entry       *md_entry;
     struct map_cache           *cache;
+    pthread_mutex_t            *mutex;
     LIST_ENTRY(map_cache_entry)  f_entry;
     TAILQ_ENTRY(map_cache_entry) u_entry;
 };
@@ -38,7 +39,7 @@ struct map_cache {
     struct map_cache_entry                 *pg_buf;
     LIST_HEAD(mb_free_l, map_cache_entry)   mbf_head;
     TAILQ_HEAD(mb_used_l, map_cache_entry)  mbu_head;
-    pthread_mutex_t                         mb_mutex;
+    pthread_spinlock_t                      mb_spin;
     uint32_t                                nfree;
     uint32_t                                nused;
     uint16_t                                id;
@@ -151,13 +152,21 @@ static int map_evict_pg_cache (struct map_cache *cache)
     if (!cache_ent)
         return -1;
 
+    pthread_mutex_lock (cache_ent->mutex);
+
+    pthread_spin_lock (&cache->mb_spin);
     TAILQ_REMOVE(&cache->mbu_head, cache_ent, u_entry);
     cache->nused--;
+    pthread_spin_unlock (&cache->mb_spin);
 
     if (cache_ent->dirty) {
         if (map_nvm_write (cache_ent)) {
+
+            pthread_spin_lock (&cache->mb_spin);
             TAILQ_INSERT_HEAD(&cache->mbu_head, cache_ent, u_entry);
             cache->nused++;
+            pthread_spin_unlock (&cache->mb_spin);
+
             return -1;
         }
         cache_ent->dirty = 0;
@@ -169,36 +178,35 @@ static int map_evict_pg_cache (struct map_cache *cache)
     cache_ent->ppa.ppa = 0;
     cache_ent->md_entry = NULL;
 
+    pthread_mutex_unlock (cache_ent->mutex);
+
+    pthread_spin_lock (&cache->mb_spin);
     LIST_INSERT_HEAD (&cache->mbf_head, cache_ent, f_entry);
     cache->nfree++;
+    pthread_spin_unlock (&cache->mb_spin);
 
     return 0;
 }
 
 static int map_load_pg_cache (struct map_cache *cache,
-                            struct app_map_entry *md_entry, uint64_t first_lba)
+           struct app_map_entry *md_entry, uint64_t first_lba, uint32_t pg_off)
 {
     struct map_cache_entry *cache_ent;
     struct app_map_entry *map_ent;
     uint64_t ent_id;
-
-    /* Per channel caching, so, there is a mutex per channel */
-    pthread_mutex_lock (&cache->mb_mutex);
 
     if (LIST_EMPTY(&cache->mbf_head))
         if (map_evict_pg_cache (cache))
             return -1;
 
     cache_ent = LIST_FIRST(&cache->mbf_head);
-    if (!cache_ent) {
-        pthread_mutex_unlock (&cache->mb_mutex);
+    if (!cache_ent)
         return -1;
-    }
 
+    pthread_spin_lock (&cache->mb_spin);
     LIST_REMOVE(cache_ent, f_entry);
     cache->nfree--;
-
-    pthread_mutex_unlock (&cache->mb_mutex);
+    pthread_spin_unlock (&cache->mb_spin);
 
     cache_ent->md_entry = md_entry;
 
@@ -215,10 +223,10 @@ static int map_load_pg_cache (struct map_cache *cache,
             cache_ent->md_entry = NULL;
             cache_ent->ppa.ppa = 0;
 
-            pthread_mutex_lock (&cache->mb_mutex);
+            pthread_spin_lock (&cache->mb_spin);
             LIST_INSERT_HEAD(&cache->mbf_head, cache_ent, f_entry);
             cache->nfree++;
-            pthread_mutex_unlock (&cache->mb_mutex);
+            pthread_spin_unlock (&cache->mb_spin);
 
             return -1;
         }
@@ -226,13 +234,15 @@ static int map_load_pg_cache (struct map_cache *cache,
         /* Cache entry PPA is set after the read completes */
     }
 
+    cache_ent->mutex = &ch[cache->id]->map_md->entry_mutex[pg_off];
+
     md_entry->ppa = (uint64_t) cache_ent;
     md_entry->ppa |= MAP_ADDR_FLAG;
 
-    pthread_mutex_lock (&cache->mb_mutex);
+    pthread_spin_lock (&cache->mb_spin);
     TAILQ_INSERT_TAIL(&cache->mbu_head, cache_ent, u_entry);
     cache->nused++;
-    pthread_mutex_unlock (&cache->mb_mutex);
+    pthread_spin_unlock (&cache->mb_spin);
 
     return 0;
 }
@@ -245,7 +255,7 @@ static int map_init_ch_cache (struct map_cache *cache)
     if (!cache->pg_buf)
         return -1;
 
-    if (pthread_mutex_init(&cache->mb_mutex, NULL))
+    if (pthread_spin_init(&cache->mb_spin, 0))
         goto FREE_BUF;
 
     cache->mbf_head.lh_first = NULL;
@@ -278,7 +288,7 @@ FREE_PGS:
         cache->nfree--;
         free (cache->pg_buf[pg_i].buf);
     }
-    pthread_mutex_destroy (&cache->mb_mutex);
+    pthread_spin_destroy (&cache->mb_spin);
 FREE_BUF:
     free (cache->pg_buf);
     return -1;
@@ -308,7 +318,7 @@ static void map_exit_ch_cache (struct map_cache *cache)
         }
     }
 
-    pthread_mutex_destroy (&cache->mb_mutex);
+    pthread_spin_destroy (&cache->mb_spin);
     free (cache->pg_buf);
 }
 
@@ -393,7 +403,8 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
 
         first_pg_lba = (lba / ent_per_pg) * ent_per_pg;
 
-        if (map_load_pg_cache (&map_ch_cache[ch_map], md_ent, first_pg_lba)) {
+        if (map_load_pg_cache (&map_ch_cache[ch_map], md_ent, first_pg_lba,
+                                                                     pg_off)) {
             pthread_mutex_unlock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
             log_err ("[appnvm(gl_map): Mapping page not loaded ch %d\n",ch_map);
             return NULL;
@@ -404,10 +415,10 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
         /* Keep cache entry as hot, in the tail of the queue */
         cache_ent = (struct map_cache_entry *) ((uint64_t) addr->g.addr);
 
-        pthread_mutex_lock (&map_ch_cache[ch_map].mb_mutex);
+        pthread_spin_lock (&map_ch_cache[ch_map].mb_spin);
         TAILQ_REMOVE(&map_ch_cache[ch_map].mbu_head, cache_ent, u_entry);
         TAILQ_INSERT_TAIL(&map_ch_cache[ch_map].mbu_head, cache_ent, u_entry);
-        pthread_mutex_unlock (&map_ch_cache[ch_map].mb_mutex);
+        pthread_spin_unlock (&map_ch_cache[ch_map].mb_spin);
 
     }
     pthread_mutex_unlock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
@@ -473,8 +484,8 @@ static uint64_t map_read (uint64_t lba)
 }
 
 void gl_map_register (void) {
-    appnvm()->gl_map.init_fn = map_init;
-    appnvm()->gl_map.exit_fn = map_exit;
+    appnvm()->gl_map.init_fn   = map_init;
+    appnvm()->gl_map.exit_fn   = map_exit;
     appnvm()->gl_map.upsert_fn = map_upsert;
-    appnvm()->gl_map.read_fn = map_read;
+    appnvm()->gl_map.read_fn   = map_read;
 }
