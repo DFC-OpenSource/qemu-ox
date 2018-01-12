@@ -5,7 +5,7 @@ This QEMU version implements the OX Controller running in the DFC Card, exposing
 Compiling QEMU:
 
 ```
-$ ./configure
+$ ./configure --target-list=x86_64-softmmu
 $ make -j16
 ```
 
