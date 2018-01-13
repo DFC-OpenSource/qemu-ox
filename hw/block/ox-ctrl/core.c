@@ -340,15 +340,11 @@ void nvm_callback (struct nvm_mmgr_io_cmd *cmd)
 int nvm_submit_ftl (struct nvm_io_cmd *cmd)
 {
     struct nvm_ftl *ftl;
-    int ret, retry, qid;
+    int ret, retry, qid, i;
+    uint8_t ch_ppa[core.nvm_ch_count];
 
     uint8_t multi_ch = 0;
     NvmeRequest *req = (NvmeRequest *) cmd->req;
-
-#if LIGHTNVM
-    int i;
-    uint8_t ch_ppa[core.nvm_ch_count];
-#endif /* LIGHTNVM */
 
     cmd->status.nvme_status = NVME_SUCCESS;
 
@@ -371,49 +367,52 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
             return NVME_CMD_ABORT_REQ;
     }
 
-#if LIGHTNVM
-    /* For now, the host ppa channel must be aligned with core.nvm_ch[] */
-    /* All PPAs in the vector must address channels managed by the same FTL */
-    if (cmd->ppalist[0].g.ch >= core.nvm_ch_count)
-        goto CH_ERR;
+    if (core.lnvm) {
 
-    ftl = core.nvm_ch[cmd->ppalist[0].g.ch]->ftl;
-
-    memset (ch_ppa, 0, sizeof (uint8_t) * core.nvm_ch_count);
-
-    /* Per PPA checking */
-    for (i = 0; i < cmd->n_sec; i++) {
-        if (cmd->ppalist[i].g.ch >= core.nvm_ch_count)
+        /*For now, the host ppa channel must be aligned with core.nvm_ch[] */
+        /*All PPAs in the vector must address channels managed by the same FTL*/
+        if (cmd->ppalist[0].g.ch >= core.nvm_ch_count)
             goto CH_ERR;
 
-        ch_ppa[cmd->ppalist[i].g.ch]++;
+        ftl = core.nvm_ch[cmd->ppalist[0].g.ch]->ftl;
 
-        if (!multi_ch && cmd->ppalist[i].g.ch != cmd->ppalist[0].g.ch)
-            multi_ch++;
+        memset (ch_ppa, 0, sizeof (uint8_t) * core.nvm_ch_count);
 
-        if (core.nvm_ch[cmd->ppalist[i].g.ch]->ftl != ftl)
-            goto FTL_ERR;
+        /* Per PPA checking */
+        for (i = 0; i < cmd->n_sec; i++) {
+            if (cmd->ppalist[i].g.ch >= core.nvm_ch_count)
+                goto CH_ERR;
 
-        /* Set channel per PPA */
-        cmd->channel[i] = core.nvm_ch[cmd->ppalist[i].g.ch];
+            ch_ppa[cmd->ppalist[i].g.ch]++;
+
+            if (!multi_ch && cmd->ppalist[i].g.ch != cmd->ppalist[0].g.ch)
+                multi_ch++;
+
+            if (core.nvm_ch[cmd->ppalist[i].g.ch]->ftl != ftl)
+                goto FTL_ERR;
+
+            /* Set channel per PPA */
+            cmd->channel[i] = core.nvm_ch[cmd->ppalist[i].g.ch];
+        }
+
+    } else {
+
+        /* For now all channels must be included in the global namespace */
+        if ((cmd->slba > (core.nvm_ns_size / cmd->sec_sz)) ||
+                (cmd->slba + (cmd->sec_sz * cmd->n_sec) > core.nvm_ns_size)) {
+            syslog(LOG_INFO,"[nvm: IO out of bounds.]\n");
+            req->status = NVME_LBA_RANGE;
+            nvm_complete_to_host(cmd);
+            return NVME_LBA_RANGE;
+        }
+
+        cmd->channel[0] = core.nvm_ch[cmd->slba /
+                                       (core.nvm_ns_size / core.nvm_ch_count)];
+        multi_ch++;
+
+        ftl = nvm_get_ftl_instance(core.std_ftl);
+
     }
-
-#else
-    /* For now all channels must be included in the global namespace */
-    if ((cmd->slba > (core.nvm_ns_size / cmd->sec_sz)) ||
-            (cmd->slba + (cmd->sec_sz * cmd->n_sec) > core.nvm_ns_size)) {
-        syslog(LOG_INFO,"[nvm: IO out of bounds.]\n");
-        req->status = NVME_LBA_RANGE;
-        nvm_complete_to_host(cmd);
-        return NVME_LBA_RANGE;
-    }
-
-    cmd->channel[0] = core.nvm_ch[cmd->slba / (core.nvm_ns_size / core.nvm_ch_count)];
-
-    multi_ch++;
-
-    ftl = nvm_get_ftl_instance(FTL_ID_STANDARD);
-#endif /* LIGHTNVM */
 
     cmd->status.status = NVM_IO_PROCESS;
     retry = NVM_QUEUE_RETRY;
@@ -427,17 +426,16 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
         else if (core.debug) {
             printf(" CMD cid: %lu, type: 0x%x submitted to FTL. "
                                "FTL queue: %d\n", cmd->cid, cmd->cmdtype, qid);
-#if LIGHTNVM
-            for (i = 0; i < core.nvm_ch_count; i++)
-                if (ch_ppa[i] > 0)
-                    printf("  Channel: %d, PPAs: %d\n", i, ch_ppa[i]);
-#endif /* LIGHTNVM */
+            if (core.lnvm) {
+                for (i = 0; i < core.nvm_ch_count; i++)
+                    if (ch_ppa[i] > 0)
+                        printf("  Channel: %d, PPAs: %d\n", i, ch_ppa[i]);
+            }
         }
     } while (ret && retry);
 
     return (retry) ? NVME_NO_COMPLETE : NVME_CMD_ABORT_REQ;
 
-#if LIGHTNVM
 CH_ERR:
     syslog(LOG_INFO,"[nvm ERROR: IO failed, channel not found.]\n");
     req->status = NVME_CMD_ABORT_REQ;
@@ -449,7 +447,6 @@ FTL_ERR:
     req->status = NVME_INVALID_FIELD;
     nvm_complete_to_host(cmd);
     return NVME_INVALID_FIELD;
-#endif /* LIGHTNVM */
 }
 
 int nvm_dma (void *ptr, uint64_t prp, ssize_t size, uint8_t direction)
@@ -738,7 +735,6 @@ static void nvm_unregister_ftl (struct nvm_ftl *ftl)
 static int nvm_ch_config (void)
 {
     int i, c = 0, ret;
-    struct nvm_ftl_cap_gl_fn app_gl;
 
     core.nvm_ch = calloc(sizeof(struct nvm_channel *), core.nvm_ch_count);
     if (nvm_memcheck(core.nvm_ch))
@@ -761,7 +757,7 @@ static int nvm_ch_config (void)
                 ch->i.in_use = NVM_CH_IN_USE;
                 ch->i.ns_id = 0x1;
                 ch->i.ns_part = c;
-                ch->i.ftl_id = FTL_ID_STANDARD;
+                ch->i.ftl_id = core.std_ftl;
 
                 /* FLush new config to NVM */
                 mmgr->ops->set_ch_info(ch, 1);
@@ -788,6 +784,7 @@ static int nvm_ch_config (void)
 
 #if FTL_APPNVM
     /* APPNVM Global Init */
+    struct nvm_ftl_cap_gl_fn app_gl;
     app_gl.arg = NULL;
     app_gl.ftl_id = FTL_ID_APPNVM;
     app_gl.fn_id = 0;
@@ -993,7 +990,6 @@ static void nvm_clear_all (uint8_t stop_all)
 {
     struct nvm_ftl *ftl;
     struct nvm_mmgr *mmgr;
-    struct nvm_ftl_cap_gl_fn app_gl;
 
     /* Clean PCIe handler */
     if(core.nvm_pcie && (core.run_flag & RUN_PCIE) && stop_all) {
@@ -1003,6 +999,7 @@ static void nvm_clear_all (uint8_t stop_all)
 
 #if FTL_APPNVM
     /* APPNVM Global Exit */
+    struct nvm_ftl_cap_gl_fn app_gl;
     if (core.run_flag & RUN_APPNVM) {
         app_gl.arg = NULL;
         app_gl.ftl_id = FTL_ID_APPNVM;

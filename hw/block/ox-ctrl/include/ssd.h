@@ -16,13 +16,10 @@
 #define __USE_GNU
 #endif
 
-#define LIGHTNVM            0
-#define INIT_DFC            1
-
 #define MMGR_DFCNAND        0
 #define MMGR_VOLT           1
 
-#define FTL_LNVMFTL         0
+#define FTL_LNVMFTL         1
 #define FTL_APPNVM          1
 
 #include <sys/queue.h>
@@ -81,7 +78,6 @@
 
 #define FTL_ID_LNVM            0x1
 #define FTL_ID_APPNVM          0x2
-#define FTL_ID_STANDARD        FTL_ID_APPNVM
 
 #define log_err(format, ...)         syslog(LOG_ERR, format, ## __VA_ARGS__)
 #define log_info(format, ...)        syslog(LOG_INFO, format, ## __VA_ARGS__)
@@ -464,8 +460,9 @@ typedef struct QemuOxCtrl {
     BlockConf       conf;
     uint32_t        reg_size;
     uint32_t        num_queues;
+    uint8_t         debug;
+    uint8_t         lnvm;
     char            *serial;
-    char            *mode;
 } QemuOxCtrl;
 
 struct core_struct {
@@ -477,6 +474,8 @@ struct core_struct {
     jmp_buf                 jump;
     uint8_t                 run_flag;
     uint8_t                 debug;
+    uint16_t                std_ftl;
+    uint8_t                 lnvm;
     struct nvm_pcie         *nvm_pcie;
     struct nvm_channel      **nvm_ch;
     struct NvmeCtrl         *nvm_nvme_ctrl;

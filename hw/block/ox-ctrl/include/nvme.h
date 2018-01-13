@@ -889,11 +889,6 @@ typedef struct NvmeRequest {
     struct nvm_io_cmd        nvm_io;
     uint8_t                  lba_index;
     QEMUBH                   *bh;
-
-#if LIGHTNVM
-    uint64_t                 lightnvm_slba;
-    uint64_t                 *lightnvm_ppa_list;
-#endif /* LIGHTNVM */
 } NvmeRequest;
 
 typedef struct NvmeFeatureVal {
@@ -1080,9 +1075,7 @@ typedef struct NvmeCtrl {
     pthread_mutex_t                             req_mutex;
     LIST_HEAD(ext_list, NvmeRequest)            ext_list;/*req allocated later*/
 
-#if LIGHTNVM
     LnvmCtrl     lightnvm_ctrl;
-#endif /* LIGHTNVM */
 } NvmeCtrl;
 
 void nvme_exit(void);
@@ -1124,7 +1117,6 @@ uint16_t nvme_compare(NvmeCtrl *, NvmeNamespace *, NvmeCmd *, NvmeRequest *);
 uint16_t nvme_write_zeros(NvmeCtrl *,NvmeNamespace *,NvmeCmd *,NvmeRequest *);
 uint16_t nvme_rw (NvmeCtrl *, NvmeNamespace *, NvmeCmd *, NvmeRequest *);
 
-#if LIGHTNVM
 /* LNVM functions */
 int lnvm_init(NvmeCtrl *);
 uint8_t lnvm_dev(NvmeCtrl *);
@@ -1141,6 +1133,5 @@ uint16_t lnvm_set_bb_tbl(NvmeCtrl *, NvmeCmd *, NvmeRequest *);
 /* LNVM IO cmd */
 uint16_t lnvm_erase_sync(NvmeCtrl *, NvmeNamespace *, NvmeCmd *, NvmeRequest *);
 uint16_t lnvm_rw(NvmeCtrl *, NvmeNamespace *, NvmeCmd *, NvmeRequest *);
-#endif /* LIGHTNVM */
 
 #endif /* NVME_H */

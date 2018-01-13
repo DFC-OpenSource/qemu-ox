@@ -8,7 +8,6 @@
 #include <math.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#if LIGHTNVM
 #include "hw/block/ox-ctrl/include/lightnvm.h"
 #include "hw/block/ox-ctrl/include/uatomic.h"
 
@@ -318,7 +317,6 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
         psl[0].ppa = spba;
     }
 
-    req->lightnvm_slba = lrw->slba;
     req->is_write = is_write;
 
     sppa = eppa = nvme_gen_to_dev_addr(ln, &psl[0]);
@@ -527,6 +525,7 @@ int lnvm_init(NvmeCtrl *n)
                   (tot_blks - rsv_blks)) / 1024);
     }
 
+    syslog (LOG_INFO,"  [nvm: LightNVM is registered]\n");
+
     return 0;
 }
-#endif /* LIGHTNVM */
