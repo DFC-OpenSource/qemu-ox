@@ -363,6 +363,7 @@ uint16_t nvme_init_sq (NvmeSQ *sq, NvmeCtrl *n, uint64_t dma_addr,
     TAILQ_INIT(&sq->out_req_list);
     for (i = 0; i < sq->size; i++) {
         sq->io_req[i].sq = sq;
+        pthread_mutex_init (&sq->io_req[i].nvm_io.mutex, NULL);
         TAILQ_INSERT_TAIL(&(sq->req_list), &sq->io_req[i], entry);
     }
 
@@ -447,6 +448,9 @@ static int nvme_start_ctrl (NvmeCtrl *n)
 
 void nvme_free_sq (NvmeSQ *sq, NvmeCtrl *n)
 {
+    for (int i = 0; i < sq->size; i++)
+        pthread_mutex_destroy (&sq->io_req[i].nvm_io.mutex);
+
     n->sq[sq->sqid] = NULL;
     FREE_VALID (sq->io_req);
     FREE_VALID (sq->prp_list);

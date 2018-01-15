@@ -167,6 +167,7 @@ struct nvm_io_cmd {
     uint32_t                    n_sec;
     uint64_t                    slba;
     uint8_t                     cmdtype;
+    pthread_mutex_t             mutex;
 };
 
 #include "hw/block/ox-ctrl/include/nvme.h"

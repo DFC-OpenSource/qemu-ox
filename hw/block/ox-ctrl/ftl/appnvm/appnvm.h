@@ -206,6 +206,11 @@ typedef uint64_t    (app_gl_map_read) (uint64_t lba);
 typedef int  (app_ppa_io_submit) (struct nvm_io_cmd *);
 typedef void (app_ppa_io_callback) (struct nvm_mmgr_io_cmd *);
 
+typedef int  (app_lba_io_init) (void);
+typedef void (app_lba_io_exit) (void);
+typedef int  (app_lba_io_submit) (struct nvm_io_cmd *);
+typedef void (app_lba_io_callback) (struct nvm_io_cmd *);
+
 struct app_channels {
     app_ch_init         *init_fn;
     app_ch_exit         *exit_fn;
@@ -260,6 +265,13 @@ struct app_ppa_io {
     app_ppa_io_callback *callback_fn;
 };
 
+struct app_lba_io {
+    app_lba_io_init     *init_fn;
+    app_lba_io_exit     *exit_fn;
+    app_lba_io_submit   *submit_fn;
+    app_lba_io_callback *callback_fn;
+};
+
 struct app_global {
     struct app_channels     channels;
     struct app_global_bbt   bbt;
@@ -269,6 +281,7 @@ struct app_global {
     struct app_ch_map       ch_map;
     struct app_gl_map       gl_map;
     struct app_ppa_io       ppa_io;
+    struct app_lba_io       lba_io;
 };
 
 /* Inline Functions */
@@ -365,5 +378,6 @@ void gl_prov_register (void);
 void ch_map_register (void);
 void gl_map_register (void);
 void ppa_io_register (void);
+void lba_io_register (void);
 
 #endif /* APP_H */

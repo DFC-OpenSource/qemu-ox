@@ -452,6 +452,7 @@ int ftl_appnvm_init (void)
     ch_map_register ();
     gl_map_register ();
     ppa_io_register ();
+    lba_io_register ();
 
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;

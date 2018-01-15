@@ -30,16 +30,16 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 #include "appnvm.h"
 
-static pthread_mutex_t endio_mutex;
 static int ppa_io_submit (struct nvm_io_cmd *);
 
-static void ppa_io_set_pgmap(uint8_t *pgmap, uint8_t index, uint8_t flag)
+static void ppa_io_set_pgmap(uint8_t *pgmap, uint8_t index, uint8_t flag,
+                                                        pthread_mutex_t *mutex)
 {
-    pthread_mutex_lock (&endio_mutex);
+    pthread_mutex_lock (mutex);
     pgmap[index / 8] = (flag)
             ? pgmap[index / 8] | (1 << (index % 8))
             : pgmap[index / 8] ^ (1 << (index % 8));
-    pthread_mutex_unlock (&endio_mutex);
+    pthread_mutex_unlock (mutex);
 }
 
 static int ppa_io_check_pgmap_complete (uint8_t *pgmap, uint8_t ni) {
@@ -73,7 +73,7 @@ static int ppa_io_check_end (struct nvm_io_cmd *cmd)
 {
     if (cmd->status.pgs_p == cmd->status.total_pgs) {
 
-        pthread_mutex_lock (&endio_mutex);
+        pthread_mutex_lock (&cmd->mutex);
         /* if true, some pages failed */
         if ( ppa_io_check_pgmap_complete (cmd->status.pg_map,
                                       ((cmd->status.total_pgs - 1) / 8) + 1)) {
@@ -98,12 +98,12 @@ static int ppa_io_check_end (struct nvm_io_cmd *cmd)
     goto RETURN;
 
 SUBMIT:
-    pthread_mutex_unlock (&endio_mutex);
+    pthread_mutex_unlock (&cmd->mutex);
     ppa_io_submit (cmd);
     goto RETURN;
 
 COMPLETE:
-    pthread_mutex_unlock (&endio_mutex);
+    pthread_mutex_unlock (&cmd->mutex);
     // TODO: CALL LBA_IO CALLBACK
     nvm_complete_ftl (cmd);
 
@@ -171,7 +171,7 @@ static int ppa_io_check (struct nvm_io_cmd *cmd)
 
     if (cmd->status.pgs_p == 0) {
         for (i = 0; i < cmd->status.total_pgs; i++)
-            ppa_io_set_pgmap (cmd->status.pg_map, i, FTL_PGMAP_ON);
+            ppa_io_set_pgmap (cmd->status.pg_map, i, FTL_PGMAP_ON, &cmd->mutex);
     }
 
     cmd->status.pgs_p = cmd->status.pgs_s;
@@ -191,16 +191,16 @@ static void ppa_io_callback (struct nvm_mmgr_io_cmd *cmd)
 {
     if (cmd->status == NVM_IO_SUCCESS) {
         ppa_io_set_pgmap (cmd->nvm_io->status.pg_map,
-                                                 cmd->pg_index, FTL_PGMAP_OFF);
-        pthread_mutex_lock (&endio_mutex);
+                            cmd->pg_index, FTL_PGMAP_OFF, &cmd->nvm_io->mutex);
+        pthread_mutex_lock (&cmd->nvm_io->mutex);
         cmd->nvm_io->status.pgs_s++;
     } else {
-        pthread_mutex_lock (&endio_mutex);
+        pthread_mutex_lock (&cmd->nvm_io->mutex);
         cmd->nvm_io->status.pg_errors++;
     }
 
     cmd->nvm_io->status.pgs_p++;
-    pthread_mutex_unlock (&endio_mutex);
+    pthread_mutex_unlock (&cmd->nvm_io->mutex);
 
     ppa_io_check_end (cmd->nvm_io);
 }
@@ -241,10 +241,10 @@ static int ppa_io_submit (struct nvm_io_cmd *cmd)
                     ret = -1;
             }
             if (ret) {
-                pthread_mutex_lock (&endio_mutex);
+                pthread_mutex_lock (&cmd->mutex);
                 cmd->status.pg_errors++;
                 cmd->status.pgs_p++;
-                pthread_mutex_unlock (&endio_mutex);
+                pthread_mutex_unlock (&cmd->mutex);
                 ppa_io_check_end (cmd);
             }
         }

@@ -29,6 +29,7 @@ common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_gl_prov.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_ch_map.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_gl_map.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_ppa_io.o
+common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/ftl/appnvm/app_lba_io.o
 common-obj-$(CONFIG_OX_CTRL) += ox-ctrl/pcie_dfc/pcie_dfc.o
 
 obj-$(CONFIG_SH4) += tc58128.o
