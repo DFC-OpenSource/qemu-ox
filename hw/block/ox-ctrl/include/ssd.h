@@ -462,6 +462,7 @@ typedef struct QemuOxCtrl {
     uint32_t        num_queues;
     uint8_t         debug;
     uint8_t         lnvm;
+    uint8_t         volt;
     char            *serial;
 } QemuOxCtrl;
 
@@ -476,6 +477,7 @@ struct core_struct {
     uint8_t                 debug;
     uint16_t                std_ftl;
     uint8_t                 lnvm;
+    uint8_t                 volt;
     struct nvm_pcie         *nvm_pcie;
     struct nvm_channel      **nvm_ch;
     struct NvmeCtrl         *nvm_nvme_ctrl;

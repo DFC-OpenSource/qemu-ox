@@ -31,6 +31,8 @@ static int ox_init(PCIDevice *pci_dev)
         core.std_ftl = FTL_ID_APPNVM;
     }
 
+    core.volt = qemuOxCtrl->volt;
+
     blkconf_serial(&qemuOxCtrl->conf, &qemuOxCtrl->serial);
 
     qemuOxCtrl->pci_dev = pci_dev;
@@ -49,6 +51,7 @@ static Property ox_props[] = {
     DEFINE_PROP_STRING("serial", QemuOxCtrl, serial),
     DEFINE_PROP_UINT8("debug", QemuOxCtrl, debug, 0),
     DEFINE_PROP_UINT8("lnvm", QemuOxCtrl, lnvm, 1),
+    DEFINE_PROP_UINT8("volt", QemuOxCtrl, volt, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

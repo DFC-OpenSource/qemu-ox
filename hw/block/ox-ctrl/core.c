@@ -978,7 +978,7 @@ static int nvm_init (uint8_t start_all)
     core.nvm_nvme_ctrl->running = 0; /* ready */
     core.nvm_nvme_ctrl->stop = 0;
 
-    printf("OX Controller started succesfully. Log: /var/log/nvme.log\n");
+    printf("OX Controller started succesfully. Log: /var/log/syslog\n");
 
     return 0;
 

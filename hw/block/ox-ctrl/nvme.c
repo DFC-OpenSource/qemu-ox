@@ -1030,6 +1030,14 @@ static void nvme_process_sq (void *opaque)
             if (core.debug) printf("%s",err);
         }
 
+        /* Enqueue completion for flush command and flush everything to NVM */
+        if (sq->sqid && cmd.opcode == NVME_CMD_FLUSH) {
+            req->status = status;
+            nvme_enqueue_req_completion (cq, req);
+            nvm_restart();
+            return;
+        }
+
         /* Enqueue completion in case of admin command */
         if (!sq->sqid && status != NVME_NO_COMPLETE) {
             req->status = status;
