@@ -265,16 +265,13 @@ int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
 
 static void app_callback_io (struct nvm_mmgr_io_cmd *cmd)
 {
-
+    appnvm()->ppa_io.callback_fn (cmd);
 }
 
 static int app_submit_io (struct nvm_io_cmd *cmd)
 {
-    cmd->status.status = NVM_IO_SUCCESS;
-    cmd->status.nvme_status = NVME_SUCCESS;
-    nvm_complete_ftl(cmd);
-
-    return 0;
+    /* TODO: CALL LBA_IO SUBMIT */
+    return appnvm()->ppa_io.submit_fn (cmd);
 }
 
 static int app_init_channel (struct nvm_channel *ch)
@@ -454,6 +451,7 @@ int ftl_appnvm_init (void)
     gl_prov_register ();
     ch_map_register ();
     gl_map_register ();
+    ppa_io_register ();
 
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;

@@ -193,12 +193,6 @@ typedef void (app_gl_prov_exit) (void);
 typedef struct app_prov_ppas *(app_gl_prov_get_ppa_list) (uint32_t);
 typedef void (app_gl_prov_free_ppa_list) (struct app_prov_ppas *);
 
-typedef int     (app_flags_init) (void);
-typedef void    (app_flags_exit) (void);
-typedef void    (app_flags_set) (uint16_t flag_id, uint16_t offset);
-typedef void    (app_flags_unset) (uint16_t flag_id, uint16_t offset);
-typedef uint8_t (app_flags_check) (uint16_t flag_id, uint16_t offset);
-
 typedef int  (app_ch_map_create) (struct app_channel *);
 typedef int  (app_ch_map_load) (struct app_channel *);
 typedef int  (app_ch_map_flush) (struct app_channel *);
@@ -208,6 +202,9 @@ typedef int         (app_gl_map_init) (void);
 typedef void        (app_gl_map_exit) (void);
 typedef int         (app_gl_map_upsert) (uint64_t lba, uint64_t ppa);
 typedef uint64_t    (app_gl_map_read) (uint64_t lba);
+
+typedef int  (app_ppa_io_submit) (struct nvm_io_cmd *);
+typedef void (app_ppa_io_callback) (struct nvm_mmgr_io_cmd *);
 
 struct app_channels {
     app_ch_init         *init_fn;
@@ -244,14 +241,6 @@ struct app_gl_prov {
     app_gl_prov_free_ppa_list *free_ppa_list_fn;
 };
 
-struct app_flags {
-    app_flags_init          *init_fn;
-    app_flags_exit          *exit_fn;
-    app_flags_set           *set_fn;
-    app_flags_unset         *unset_fn;
-    app_flags_check         *check_fn;
-};
-
 struct app_ch_map {
     app_ch_map_create   *create_fn;
     app_ch_map_load     *load_fn;
@@ -266,15 +255,20 @@ struct app_gl_map {
     app_gl_map_read    *read_fn;
 };
 
+struct app_ppa_io {
+    app_ppa_io_submit   *submit_fn;
+    app_ppa_io_callback *callback_fn;
+};
+
 struct app_global {
     struct app_channels     channels;
     struct app_global_bbt   bbt;
     struct app_global_md    md;
     struct app_ch_prov      ch_prov;
     struct app_gl_prov      gl_prov;
-    struct app_flags        flags;
     struct app_ch_map       ch_map;
     struct app_gl_map       gl_map;
+    struct app_ppa_io       ppa_io;
 };
 
 /* Inline Functions */
@@ -370,5 +364,6 @@ void ch_prov_register (void);
 void gl_prov_register (void);
 void ch_map_register (void);
 void gl_map_register (void);
+void ppa_io_register (void);
 
 #endif /* APP_H */
