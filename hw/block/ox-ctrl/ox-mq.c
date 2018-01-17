@@ -12,6 +12,24 @@
 static int mq_count = 0;
 LIST_HEAD(mq_list, ox_mq) mq_head = LIST_HEAD_INITIALIZER(mq_head);
 
+int ox_mq_get_status (struct ox_mq *mq, struct ox_mq_stats *st, uint16_t qid)
+{
+    if (!mq || !st || qid > mq->config->n_queues)
+        return -1;
+
+    memcpy (st, &mq->queues[qid].stats, sizeof (struct ox_mq_stats));
+
+    return 0;
+}
+
+int ox_mq_used_count (struct ox_mq *mq, uint16_t qid)
+{
+    if (!mq || qid > mq->config->n_queues)
+        return -1;
+
+    return u_atomic_read(&mq->queues[qid].stats.sq_used);
+}
+
 void ox_mq_show_mq (struct ox_mq *mq)
 {
     int i;
