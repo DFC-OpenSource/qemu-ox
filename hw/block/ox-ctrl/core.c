@@ -182,6 +182,10 @@ static uint16_t nvm_ftl_q_schedule (struct nvm_ftl *ftl,
 {
     uint16_t qid;
 
+    /* Separate writes and reads in different queues for AppNVM FTL */
+    if (ftl->ftl_id == FTL_ID_APPNVM)
+        return (cmd->cmdtype == MMGR_WRITE_PG) ? 0 : 1;
+
     if (!multi_ch)
         return cmd->channel[0]->ch_id % ftl->nq;
     else {

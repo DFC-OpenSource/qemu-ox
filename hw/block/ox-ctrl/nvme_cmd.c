@@ -721,19 +721,6 @@ uint16_t nvme_rw (NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         req->nvm_io.status.pg_map[i] = 0;
     }
 
-    memset (req->nvm_io.mmgr_io, 0x0, sizeof (struct nvm_mmgr_io_cmd) * 64);
-
-    /* For now, we assume that MMGR I/Os are synchronous from write buffer */
- /*   for (i = 0; i < 64; i++) {
-        req->nvm_io.mmgr_io[i].pg_index = i;
-        req->nvm_io.mmgr_io[i].status = NVM_IO_SUCCESS;
-        req->nvm_io.mmgr_io[i].nvm_io = &req->nvm_io;
-        req->nvm_io.mmgr_io[i].pg_sz = NVME_KERNEL_PG_SIZE;
-        req->nvm_io.mmgr_io[i].sync_count = NULL;
-        req->nvm_io.mmgr_io[i].sync_mutex = NULL;
-        req->nvm_io.md_prp[i] = 0;
-    }*/
-
     if (core.debug)
         nvme_debug_print_io (rw, req->nvm_io.sec_sz, data_size,
                                      req->nvm_io.md_sz, elba, req->nvm_io.prp);

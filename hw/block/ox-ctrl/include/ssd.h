@@ -54,8 +54,8 @@
 #define MAX_NAME_SIZE           31
 #define NVM_QUEUE_RETRY         16
 #define NVM_QUEUE_RETRY_SLEEP   500
-#define NVM_FTL_QUEUE_SIZE      64
-#define NVM_FTL_QUEUE_TO        1000000
+#define NVM_FTL_QUEUE_SIZE      256
+#define NVM_FTL_QUEUE_TO        2000000
 
 #define NVM_SYNCIO_TO          10
 #define NVM_SYNCIO_FLAG_BUF    0x1

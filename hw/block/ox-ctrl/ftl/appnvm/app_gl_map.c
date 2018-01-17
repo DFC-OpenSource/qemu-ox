@@ -30,7 +30,7 @@
 #include <sys/queue.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#define MAP_BUF_CH_PGS  10        /* 4 MB per channel */
+#define MAP_BUF_CH_PGS  128       /* 4 MB per channel */
 #define MAP_BUF_PG_SZ   32 * 1024 /* 32 KB */
 
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
@@ -101,10 +101,9 @@ static int map_nvm_write (struct map_cache_entry *ent)
         return -1;
     }
 
-    if (prov_ppa->nch != 1 ||
-            prov_ppa->nppas != prov_ppa->ch[0]->ch->geometry->sec_per_pl_pg)
-        log_err ("[appnvm (gl_map): NVM write. wrong PPAs. nppas %d, nchs %d]",
-                                                prov_ppa->nppas, prov_ppa->nch);
+    if (prov_ppa->nppas != prov_ppa->ch[0]->ch->geometry->sec_per_pl_pg)
+        log_err ("[appnvm (gl_map): NVM write. wrong PPAs. nppas %d]",
+                                                              prov_ppa->nppas);
 
     addr = &prov_ppa->ppa[0];
     lch = ch[addr->g.ch];
@@ -362,6 +361,8 @@ static int map_init (void)
 
     ent_per_pg = pg_sz / sizeof(struct app_map_entry);
 
+    log_info("    [appnvm: Global Mapping started.]\n");
+
     return 0;
 
 EXIT_BUF_CH:
@@ -483,12 +484,12 @@ static uint64_t map_read (uint64_t lba)
     ent_off = lba % ent_per_pg;
     if (ent_off >= ent_per_pg) {
         log_err ("[appnvm(gl_map): Entry offset out of bounds. lba %lu\n", lba);
-        return 0;
+        return AND64;
     }
 
     cache_ent = map_get_cache_entry (lba);
     if (!cache_ent)
-        return 0;
+        return AND64;
 
     map_ent = &((struct app_map_entry *) cache_ent->buf)[ent_off];
 

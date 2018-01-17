@@ -270,8 +270,7 @@ static void app_callback_io (struct nvm_mmgr_io_cmd *cmd)
 
 static int app_submit_io (struct nvm_io_cmd *cmd)
 {
-    /* TODO: CALL LBA_IO SUBMIT */
-    return appnvm()->ppa_io.submit_fn (cmd);
+    return appnvm()->lba_io.submit_fn (cmd);
 }
 
 static int app_init_channel (struct nvm_channel *ch)
@@ -382,8 +381,15 @@ static int app_global_init (void)
         goto EXIT_GL_PROV;
     }
 
+    if (appnvm()->lba_io.init_fn ()) {
+        log_err ("[appnvm: LBA I/O NOT started.\n");
+        goto EXIT_GL_MAP;
+    }
+
     return 0;
 
+EXIT_GL_MAP:
+    appnvm()->gl_map.exit_fn ();
 EXIT_GL_PROV:
     appnvm()->gl_prov.exit_fn ();
     return -1;
@@ -391,6 +397,7 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
+    appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
 }
@@ -433,7 +440,7 @@ struct nvm_ftl_ops app_ops = {
 struct nvm_ftl app_ftl = {
     .ftl_id         = FTL_ID_APPNVM,
     .name           = "APPNVM",
-    .nq             = 8,
+    .nq             = 2,
     .ops            = &app_ops,
     .cap            = ZERO_32FLAG,
 };

@@ -104,8 +104,7 @@ SUBMIT:
 
 COMPLETE:
     pthread_mutex_unlock (&cmd->mutex);
-    // TODO: CALL LBA_IO CALLBACK
-    nvm_complete_ftl (cmd);
+    appnvm()->lba_io.callback_fn (cmd);
 
 RETURN:
     return 0;

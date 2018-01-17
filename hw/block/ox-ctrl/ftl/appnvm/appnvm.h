@@ -45,7 +45,7 @@
 
 #define APPNVM_FLUSH_RETRY  3
 
-#define APPNVM_DEBUG       1
+#define APPNVM_DEBUG       0
 
 enum app_functions {
     APP_FN_GLOBAL   = 0
