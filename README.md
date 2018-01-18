@@ -13,12 +13,18 @@ Please use the follow command to run QEMU (change yout paths and resources) with
 Install Linux in the image and use the kernel in the repository below.
 
 ```
-sudo ~/git_dfc/qemu-ox/x86_64-softmmu/qemu-system-x86_64 -monitor stdio -m 6G -smp 4 -s -drive file=/home/red-eagle/ubuntuimg,id=diskdrive,format=raw,if=none -device ide-hd,drive=diskdrive -device ox-ctrl,lnvm=0,debug=0,serial=deadbeef -serial pty --enable-kvm
+sudo ~/git_dfc/qemu-ox/x86_64-softmmu/qemu-system-x86_64 -monitor stdio -m 6G -smp 4 -s -drive file=/home/red-eagle/ubuntuimg,id=diskdrive,format=raw,if=none -device ide-hd,drive=diskdrive -device ox-ctrl,lnvm=0,debug=0,volt=0,serial=deadbeef -serial pty --enable-kvm
 
 device ox-ctrl params:
+
  'lnvm'  -> If defined with positive value, OX starts in open-channel mode
-            If not defined or defined as zero, OX starts AppNVM mode
+            If not defined or defined as zero, OX starts in AppNVM FTL mode
+ 
  'debug' -> If defined with positive value, OX starts in debug mode
+
+ 'volt'  -> If defined with positive value, OX creates/loads/flushes a file as a disk (data is persisted)
+            To persist the disk, please run 'sudo nvme reset /dev/nvme0' in the VM
+            If not defined or defined as zero, OX starts with volatile storage
 ```
 AppNVM mode runs a FTL in the device, for having the FTL in the host, please use 'pblk' in open-channel mode:
 ```
