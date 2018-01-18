@@ -16,7 +16,7 @@ static struct nvm_mmgr      volt_mmgr;
 static void                 **dma_buf;
 extern struct core_struct   core;
 
-static const char *volt_disk = "voltdisk2";
+static const char *volt_disk = "volt_disk";
 
 static int volt_start_prp_map(void)
 {

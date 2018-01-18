@@ -82,6 +82,7 @@ static void lba_io_callback (struct nvm_io_cmd *cmd)
     uint16_t i;
     struct lba_io_cmd *lcmd;
     struct lba_io_sec **lba;
+    struct nvm_io_cmd *nvme_cmd;
 
     lcmd = (struct lba_io_cmd *) cmd;
     lba = lcmd->vec;
@@ -90,13 +91,15 @@ static void lba_io_callback (struct nvm_io_cmd *cmd)
         if (!lba[i])
             continue;
 
+        nvme_cmd = lba[i]->nvme;
+
         /* Check if lba has timeout */
-        if (lba[i]->nvme == 0x0)
+        if (nvme_cmd == 0x0)
             goto COMPLETE_LBA;
 
-        if (lba[i]->nvme->status.status != NVM_IO_FAIL) {
-            lba[i]->nvme->status.status = NVM_IO_SUCCESS;
-            lba[i]->nvme->status.nvme_status = NVME_SUCCESS;
+        if (nvme_cmd->status.status != NVM_IO_FAIL) {
+            nvme_cmd->status.status = cmd->status.status;
+            nvme_cmd->status.nvme_status = cmd->status.nvme_status;
         }
 
 COMPLETE_LBA:
