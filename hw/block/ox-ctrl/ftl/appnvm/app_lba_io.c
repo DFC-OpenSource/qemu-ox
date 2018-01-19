@@ -31,6 +31,7 @@
 #include "appnvm.h"
 
 struct lba_io_sec {
+    uint32_t                   lba_id;
     struct nvm_io_cmd         *nvme;
     uint64_t                   lba;
     struct nvm_ppa_addr        ppa;
@@ -47,6 +48,11 @@ struct lba_io_cmd {
     struct app_prov_ppas        *prov;
     STAILQ_ENTRY(lba_io_cmd)     fentry;
     TAILQ_ENTRY(lba_io_cmd)      uentry;
+};
+
+struct lba_io_sec_ent {
+    uint64_t lba;
+    uint64_t ppa;
 };
 
 #define LBA_IO_ENTRIES  64
@@ -77,6 +83,13 @@ static struct app_channel **ch;
 static struct lba_io_sec   *rw_line[2][64];
 static uint8_t              rw_off[2];
 
+static void lba_io_reset_cmd (struct lba_io_cmd *lcmd)
+{
+    memset (&lcmd->cmd, 0x0, sizeof (struct nvm_io_cmd));
+    memset (lcmd->vec, 0x0, sizeof (struct lba_io_sec *) * 64);
+    lcmd->prov = 0x0;
+}
+
 static void lba_io_callback (struct nvm_io_cmd *cmd)
 {
     uint16_t i;
@@ -106,9 +119,10 @@ COMPLETE_LBA:
         ox_mq_complete_req (lba_io_mq, lba[i]->mentry);
     }
 
-    if (cmd->cmdtype == MMGR_WRITE_PG)
+    if ((cmd->cmdtype == MMGR_WRITE_PG) && lcmd->prov)
         appnvm()->gl_prov.free_ppa_list_fn (lcmd->prov);
 
+    lcmd->prov = 0x0;
     pthread_spin_lock (&cmd_spin);
     TAILQ_REMOVE(&ucmdhead, lcmd, uentry);
     STAILQ_INSERT_TAIL(&fcmdhead, lcmd, fentry);
@@ -117,7 +131,7 @@ COMPLETE_LBA:
 
 static int lba_io_submit (struct nvm_io_cmd *cmd)
 {
-    uint32_t sec_i, qtype;
+    uint32_t sec_i, qtype, ret;
     struct lba_io_sec *lba[256];
     qtype = (cmd->cmdtype == MMGR_WRITE_PG) ? LBA_IO_WRITE_Q : LBA_IO_READ_Q;
 
@@ -135,6 +149,7 @@ static int lba_io_submit (struct nvm_io_cmd *cmd)
         TAILQ_INSERT_TAIL(&ulbahead, lba[sec_i], uentry);
         pthread_spin_unlock (&sec_spin);
 
+        lba[sec_i]->lba_id = sec_i;
         lba[sec_i]->nvme = cmd;
         lba[sec_i]->lba = cmd->slba + sec_i;
         lba[sec_i]->type = qtype;
@@ -143,14 +158,21 @@ static int lba_io_submit (struct nvm_io_cmd *cmd)
 
     for (sec_i = 0; sec_i < cmd->n_sec; sec_i++) {
         if (ox_mq_submit_req(lba_io_mq, qtype, lba[sec_i]))
-            /* MQ_TO takes care of aborting submitted lbas */
+            /* MQ_TO and callback take care of aborting submitted lbas */
             goto REQUEUE_UNPROCESSED;
     }
 
     return 0;
 
 REQUEUE_UNPROCESSED:
+    cmd->status.status = NVM_IO_FAIL;
+    cmd->status.nvme_status = NVME_CAP_EXCEEDED;
+
+    /* If at least 1 lba has been enqueued, let the callback
+                                completing the nvme cmd by returning success */
+    ret = (sec_i) ? 0 : -1;
     while (sec_i < cmd->n_sec) {
+        lba[sec_i]->nvme->status.pgs_p++;
         lba[sec_i]->nvme = 0x0;
         lba[sec_i]->lba = 0x0;
         lba[sec_i]->prp = 0x0;
@@ -160,7 +182,7 @@ REQUEUE_UNPROCESSED:
         pthread_spin_unlock (&sec_spin);
         sec_i++;
     }
-    return -1;
+    return ret;
 
 REQUEUE:
     while (sec_i) {
@@ -173,6 +195,8 @@ REQUEUE:
         STAILQ_INSERT_TAIL(&flbahead, lba[sec_i], fentry);
         pthread_spin_unlock (&sec_spin);
     }
+    cmd->status.status = NVM_IO_FAIL;
+    cmd->status.nvme_status = NVME_CAP_EXCEEDED;
     return -1;
 }
 
@@ -187,6 +211,9 @@ static void lba_io_mq_to (void **opaque, int c)
         lba = (struct lba_io_sec *) opaque[sec_i];
         log_err (" [appnvm (lba_io): TIMEOUT LBA-> %lu, cmd-> %p\n",
                                                           lba->lba, lba->nvme);
+        lba->nvme->status.status = NVM_IO_FAIL;
+        lba->nvme->status.nvme_status = NVME_MEDIA_TIMEOUT;
+        lba->nvme->status.pgs_p++;
         lba->nvme = 0x0;
         lba->lba = 0x0;
         lba->prp = 0x0;
@@ -248,6 +275,7 @@ static void lba_io_prepare_cmd (struct lba_io_cmd *lcmd, uint8_t type)
 
 static int lba_io_write (struct lba_io_cmd *lcmd)
 {
+    struct lba_io_sec_ent *nvme_lba;
     uint32_t sec_i, pgs;
     struct nvm_io_cmd *cmd;
     struct app_prov_ppas *ppas;
@@ -259,7 +287,7 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
 
     ppas = appnvm()->gl_prov.get_ppa_list_fn (pgs);
     if (!ppas || ppas->nppas < nlb)
-        return -1;
+        return 1;
 
     lcmd->prov = ppas;
     cmd = &lcmd->cmd;
@@ -273,6 +301,14 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
         cmd->channel[sec_i]     = ch[ppas->ppa[sec_i].g.ch]->ch;
 
         lcmd->vec[sec_i]        = rw_line[LBA_IO_WRITE_Q][sec_i];
+
+        /* Keep the LBA/PPAs in the nvme command, in this way, if the command
+        fails, no lba is upserted in the mapping table */
+        nvme_lba = (struct lba_io_sec_ent *) lcmd->vec[sec_i]->nvme->mmgr_io
+                                          [lcmd->vec[sec_i]->lba_id / 4].rsvd;
+        nvme_lba = nvme_lba + (lcmd->vec[sec_i]->lba_id % 4);
+        nvme_lba->lba = lcmd->vec[sec_i]->lba;
+        nvme_lba->ppa = lcmd->vec[sec_i]->ppa.ppa;
     }
 
     /* Padding the physical write if needed (same data for now) */
@@ -285,14 +321,21 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
 
     lba_io_prepare_cmd (lcmd, LBA_IO_WRITE_Q);
 
-    if (appnvm()->ppa_io.submit_fn (cmd))
-        /* TODO: If write fails, tell provisioning to recycle current block */
+    if (appnvm()->ppa_io.submit_fn (cmd)) {
+        /* TODO: If PPA IO is failed, tell provisioning to recycle current
+         * blocks and abort any write to the blocks, otherwise we loose the
+         * sequential writes guarantee within a block. Keep track of status of
+         * each LBA and recycle only necessary blocks */
         goto FREE_PPAS;
+    }
 
     return 0;
 
 FREE_PPAS:
-    appnvm()->gl_prov.free_ppa_list_fn (ppas);
+    if (lcmd->prov) {
+        appnvm()->gl_prov.free_ppa_list_fn (ppas);
+        lcmd->prov = 0x0;
+    }
     return -1;
 }
 
@@ -311,13 +354,12 @@ static int lba_io_read (struct lba_io_cmd *lcmd)
         sec_ppa.ppa = appnvm()->gl_map.read_fn
                                           (rw_line[LBA_IO_READ_Q][sec_i]->lba);
         if (sec_ppa.ppa == AND64)
-            return -1;
+            return 1;
 
         rw_line[LBA_IO_READ_Q][sec_i]->ppa.ppa = sec_ppa.ppa;
         cmd->ppalist[sec_i].ppa = sec_ppa.ppa;
         cmd->prp[sec_i] = rw_line[LBA_IO_READ_Q][sec_i]->prp;
 
-        /* TODO: Get the channel instance in a better way */
         cmd->channel[sec_i] = ch[sec_ppa.g.ch]->ch;
 
         lcmd->vec[sec_i] = rw_line[LBA_IO_READ_Q][sec_i];
@@ -328,16 +370,9 @@ static int lba_io_read (struct lba_io_cmd *lcmd)
     return appnvm()->ppa_io.submit_fn (cmd);
 }
 
-static void lba_io_reset_cmd (struct lba_io_cmd *lcmd)
-{
-    memset (&lcmd->cmd, 0x0, sizeof (struct nvm_io_cmd));
-    memset (lcmd->vec, 0x0, sizeof (struct lba_io_sec *) * 64);
-    lcmd->prov = 0x0;
-}
-
 static int lba_io_rw (uint8_t type)
 {
-    uint32_t ret;
+    int ret;
     struct lba_io_cmd *lcmd;
 
     if (STAILQ_EMPTY(&fcmdhead))
@@ -356,19 +391,19 @@ static int lba_io_rw (uint8_t type)
     lba_io_reset_cmd (lcmd);
 
     ret = (!type) ? lba_io_write (lcmd) : lba_io_read (lcmd);
+
     if (ret)
         goto REQUEUE;
 
     return 0;
 
 REQUEUE:
-    lba_io_reset_cmd (lcmd);
     pthread_spin_lock (&cmd_spin);
     TAILQ_REMOVE(&ucmdhead, lcmd, uentry);
     STAILQ_INSERT_TAIL(&fcmdhead, lcmd, fentry);
     pthread_spin_unlock (&cmd_spin);
 
-    return -1;
+    return ret;
 }
 
 static void lba_io_complete_failed_lbas (uint8_t type)
@@ -407,6 +442,7 @@ static void lba_io_sec_sq (struct ox_mq_entry *req)
     if ((rw_off[lba->type] == LBA_IO_PPA_SIZE) || !ret) {
         if (lba_io_rw (lba->type))
             lba_io_complete_failed_lbas (lba->type);
+
         goto RESET_LINE;
     }
 
@@ -417,37 +453,71 @@ RESET_LINE:
     memset (rw_line[lba->type], 0x0, sizeof (struct lba_io_sec *) * 64);
 }
 
+static void lba_io_upsert_map (struct nvm_io_cmd *cmd)
+{
+    uint32_t sec;
+    struct lba_io_sec_ent *ent;
+    uint64_t old_ppa;
+
+    for (sec = 0; sec < cmd->n_sec; sec++) {
+        ent = (struct lba_io_sec_ent *) cmd->mmgr_io[sec / 4].rsvd;
+        ent = ent + (sec % 4);
+
+        old_ppa = appnvm()->gl_map.read_fn (ent->lba);
+        if (old_ppa == AND64)
+            goto ROLLBACK;
+
+        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa))
+            goto ROLLBACK;
+
+        ent->ppa = old_ppa;
+    }
+
+    return;
+
+ROLLBACK:
+    while (sec) {
+        sec--;
+        ent = (struct lba_io_sec_ent *) cmd->mmgr_io[sec / 4].rsvd;
+        ent = ent + (sec % 4);
+        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa))
+            log_err ("[lba_io: Failed to rollback failed upserted LBAs. "
+                                "LBA: %lu, nlbas: %d]", ent->lba - sec, sec);
+    }
+    cmd->status.status = NVM_IO_FAIL;
+    cmd->status.nvme_status = NVME_INTERNAL_DEV_ERROR;
+}
+
 static void lba_io_sec_callback (void *opaque)
 {
     struct lba_io_sec *lba = (struct lba_io_sec *) opaque;
-    struct nvm_io_cmd *cmd = lba->nvme;
+    struct nvm_io_cmd *nvme_cmd = lba->nvme;
 
     /* If cmd is NULL, lba has timeout */
-    if (lba->nvme == 0x0)
-        goto TIMEOUT;
+    if (nvme_cmd == 0x0)
+        goto ERR_TIMEOUT;
 
-    if (appnvm()->gl_map.upsert_fn (lba->lba, lba->ppa.ppa)) {
-        /* TODO: Rollback all upserts (only for lbas from failed nvme cmds*/
+    if (nvme_cmd->status.status == NVM_IO_TIMEOUT)
+        goto ERR_TIMEOUT;
 
-        lba->nvme->status.status = NVM_IO_FAIL;
-        lba->nvme->status.nvme_status = NVME_INTERNAL_DEV_ERROR;
+    pthread_mutex_lock (&nvme_cmd->mutex);
+    nvme_cmd->status.pgs_p++;
+    pthread_mutex_unlock (&nvme_cmd->mutex);
+
+    if (nvme_cmd->status.pgs_p == nvme_cmd->n_sec) {
+        if (lba->type == LBA_IO_WRITE_Q &&
+                                     nvme_cmd->status.status == NVM_IO_SUCCESS)
+            lba_io_upsert_map (nvme_cmd);
+
+        /* TODO: If nvme cmd is failed, tell provisioning to recycle current
+         * block and abort any write to the blocks, otherwise we loose the
+         * sequential writes guarantee within a block. Keep track of status of
+         * each LBA and recycle only necessary blocks */
+
+        nvm_complete_ftl (nvme_cmd);
     }
 
-TIMEOUT:
-    /* TODO: If up layer queue (nvme) timeouts the nvm_io_cmd,
-                                                 * this should not be updated */
-    pthread_mutex_lock (&cmd->mutex);
-    cmd->status.pgs_p++;
-    pthread_mutex_unlock (&cmd->mutex);
-
-    if (cmd->status.pgs_p == cmd->n_sec) {
-        if (cmd->status.status == NVM_IO_PROCESS) {
-            cmd->status.status = NVM_IO_SUCCESS;
-            cmd->status.nvme_status = NVME_SUCCESS;
-        }
-        nvm_complete_ftl (cmd);
-    }
-
+ERR_TIMEOUT:
     lba->nvme = 0x0;
     lba->lba = lba->ppa.ppa = lba->prp = 0x0;
     pthread_spin_lock (&sec_spin);
@@ -459,7 +529,7 @@ TIMEOUT:
 struct ox_mq_config lba_io_mq_config = {
     /* Queue 0: write, queue 1: read */
     .n_queues   = 2,
-    .q_size     = LBA_IO_ENTRIES * 64,
+    .q_size     = LBA_IO_ENTRIES * 128,
     .sq_fn      = lba_io_sec_sq,
     .cq_fn      = lba_io_sec_callback,
     .to_fn      = lba_io_mq_to,

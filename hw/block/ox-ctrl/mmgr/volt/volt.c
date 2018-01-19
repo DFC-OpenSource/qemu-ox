@@ -449,7 +449,9 @@ static void volt_execute_io (struct ox_mq_entry *req)
     ret = volt_process_io(cmd);
 
     if (ret) {
-        log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
+        log_err ("[volt: Cmd 0x%x NOT completed. (%d/%d/%d/%d/%d)]\n",
+                cmd->cmdtype, cmd->ppa.g.ch, cmd->ppa.g.lun, cmd->ppa.g.blk,
+                cmd->ppa.g.pl, cmd->ppa.g.pg);
         cmd->status = NVM_IO_FAIL;
         goto COMPLETE;
     }

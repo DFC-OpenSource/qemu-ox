@@ -237,6 +237,11 @@ FREE_PPA:
 
 static void gl_prov_free_ppa_list (struct app_prov_ppas *ppas)
 {
+    if (!ppas) {
+        log_err ("[gl_prov (free_ppas): NULL pointer. Ch users is unstable.]");
+        return;
+    }
+
     if (APPNVM_DEBUG)
         printf ("\n[appnvm (gl_prov): FREE - %d ppas]\n", ppas->nppas);
 

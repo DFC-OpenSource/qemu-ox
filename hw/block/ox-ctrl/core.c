@@ -237,7 +237,7 @@ static void nvm_ftl_process_sq (struct ox_mq_entry *req)
     ret = ftl->ops->submit_io(cmd);
 
     if (ret) {
-        log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
+        log_err ("[ftl: Cmd %lu (0x%x) NOT completed. ret %d]\n",cmd->cid,cmd->cmdtype, ret);
         nvm_complete_ftl(cmd);
     }
 }
@@ -256,7 +256,7 @@ static void nvm_ftl_process_to (void **opaque, int counter)
     while (counter) {
         counter--;
         cmd = (struct nvm_io_cmd *) opaque[counter];
-        cmd->status.status = NVM_IO_FAIL;
+        cmd->status.status = NVM_IO_TIMEOUT;
         cmd->status.nvme_status = NVME_MEDIA_TIMEOUT;
     }
 }
