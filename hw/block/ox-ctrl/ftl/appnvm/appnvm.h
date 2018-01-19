@@ -44,6 +44,7 @@
 #define APP_IO_RESERVED 1 /* Used for FTL reerved blocks */
 
 #define APPNVM_FLUSH_RETRY  3
+#define APPNVM_GC_THRESD    0.3
 
 #define APPNVM_DEBUG       0
 
@@ -112,7 +113,8 @@ struct app_blk_md_entry {
     uint16_t                flags;
     struct nvm_ppa_addr     ppa;
     uint32_t                erase_count;
-    uint32_t                current_pg;
+    uint16_t                current_pg;
+    uint16_t                invalid_pgs;
     uint8_t                 pg_state[64]; /* maximum of 512 pages per blk */
 } __attribute__((packed));   /* 82 bytes per entry */
 
@@ -211,6 +213,9 @@ typedef void (app_lba_io_exit) (void);
 typedef int  (app_lba_io_submit) (struct nvm_io_cmd *);
 typedef void (app_lba_io_callback) (struct nvm_io_cmd *);
 
+typedef int  (app_gc_init) (void);
+typedef void (app_gc_exit) (void);
+
 struct app_channels {
     app_ch_init         *init_fn;
     app_ch_exit         *exit_fn;
@@ -272,6 +277,11 @@ struct app_lba_io {
     app_lba_io_callback *callback_fn;
 };
 
+struct app_gc {
+    app_gc_init         *init_fn;
+    app_gc_exit         *exit_fn;
+};
+
 struct app_global {
     struct app_channels     channels;
     struct app_global_bbt   bbt;
@@ -282,6 +292,7 @@ struct app_global {
     struct app_gl_map       gl_map;
     struct app_ppa_io       ppa_io;
     struct app_lba_io       lba_io;
+    struct app_gc           gc;
 };
 
 /* Inline Functions */
@@ -379,5 +390,6 @@ void ch_map_register (void);
 void gl_map_register (void);
 void ppa_io_register (void);
 void lba_io_register (void);
+void gc_register (void);
 
 #endif /* APP_H */

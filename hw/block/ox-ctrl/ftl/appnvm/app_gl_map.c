@@ -35,6 +35,8 @@
 
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
 
+static pthread_spinlock_t *md_ch_spin;
+
 struct map_cache_entry {
     uint8_t                     dirty;
     uint8_t                    *buf;
@@ -337,7 +339,7 @@ static int map_init (void)
 {
     uint32_t nch, ch_i, pg_sz;
 
-    ch = malloc (sizeof(struct app_channel *) * app_nch);
+    ch = malloc (sizeof (struct app_channel *) * app_nch);
     if (!ch)
         return -1;
 
@@ -345,9 +347,18 @@ static int map_init (void)
     if (nch != app_nch)
         goto FREE_CH;
 
-    map_ch_cache = malloc (sizeof(struct map_cache) * app_nch);
+    map_ch_cache = malloc (sizeof (struct map_cache) * app_nch);
     if (!map_ch_cache)
         goto FREE_CH;
+
+    md_ch_spin = malloc (sizeof (pthread_spinlock_t) * app_nch);
+    if (!md_ch_spin)
+        goto FREE_CACHE;
+
+    for (ch_i = 0; ch_i < app_nch; ch_i++) {
+        if (pthread_spin_init (&md_ch_spin[ch_i], 0))
+            goto FREE_SPIN;
+    }
 
     pg_sz = ch[0]->ch->geometry->pl_pg_size;
     for (ch_i = 0; ch_i < app_nch; ch_i++) {
@@ -359,7 +370,7 @@ static int map_init (void)
         map_ch_cache[ch_i].id = ch_i;
     }
 
-    ent_per_pg = pg_sz / sizeof(struct app_map_entry);
+    ent_per_pg = pg_sz / sizeof (struct app_map_entry);
 
     log_info("    [appnvm: Global Mapping started.]\n");
 
@@ -370,6 +381,14 @@ EXIT_BUF_CH:
         ch_i--;
         map_exit_ch_cache (&map_ch_cache[ch_i]);
     }
+    ch_i = app_nch;
+FREE_SPIN:
+    while (ch_i) {
+        ch_i--;
+        pthread_spin_destroy (&md_ch_spin[ch_i]);
+    }
+    free ((void *) md_ch_spin);
+FREE_CACHE:
     free (map_ch_cache);
 FREE_CH:
     free (ch);
@@ -383,8 +402,10 @@ static void map_exit (void)
     while (ch_i) {
         ch_i--;
         map_exit_ch_cache (&map_ch_cache[ch_i]);
+        pthread_spin_destroy (&md_ch_spin[ch_i]);
     }
 
+    free ((void *) md_ch_spin);
     free (map_ch_cache);
     free (ch);
 }
@@ -445,10 +466,14 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
 
 static int map_upsert (uint64_t lba, uint64_t ppa)
 {
+    uint8_t *pg_map;
     uint32_t ch_map, ent_off;
     struct app_map_entry *map_ent;
     struct map_cache_entry *cache_ent;
+    struct nvm_ppa_addr old_ppa;
+    struct app_blk_md_entry *blk_md;
 
+    ch_map = (lba / ent_per_pg) % app_nch;
     ent_off = lba % ent_per_pg;
     if (ent_off >= ent_per_pg) {
         log_err ("[appnvm(gl_map): Entry offset out of bounds. Ch %d\n",ch_map);
@@ -465,6 +490,20 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
         log_err ("[appnvm(gl_map): LBA does not match entry. lba: %lu, "
                             "map lba: %lu, Ch %d\n", lba, map_ent->lba, ch_map);
         return -1;
+    }
+
+    /* If LBA is not new, mark old PPA page as invalid for GC */
+    if (map_ent->ppa) {
+        old_ppa.ppa = map_ent->ppa;
+        blk_md = appnvm()->md.get_fn (ch[ch_map], old_ppa.g.lun);
+        pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg / 8];
+
+        if (!(*pg_map & (1 << (old_ppa.g.pg % 8)))) {
+            pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
+            *pg_map |= (1 << (old_ppa.g.pg % 8));
+            blk_md->invalid_pgs++;
+            pthread_spin_unlock (&md_ch_spin[old_ppa.g.ch]);
+        }
     }
 
     /* Update mapping table entry

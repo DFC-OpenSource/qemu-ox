@@ -386,8 +386,15 @@ static int app_global_init (void)
         goto EXIT_GL_MAP;
     }
 
+    if (appnvm()->gc.init_fn ()) {
+        log_err ("[appnvm: GC NOT started.\n");
+        goto EXIT_LBA_IO;
+    }
+
     return 0;
 
+EXIT_LBA_IO:
+    appnvm()->lba_io.exit_fn ();
 EXIT_GL_MAP:
     appnvm()->gl_map.exit_fn ();
 EXIT_GL_PROV:
@@ -397,6 +404,7 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
+    appnvm()->gc.exit_fn ();
     appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
@@ -460,6 +468,7 @@ int ftl_appnvm_init (void)
     gl_map_register ();
     ppa_io_register ();
     lba_io_register ();
+    gc_register ();
 
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;

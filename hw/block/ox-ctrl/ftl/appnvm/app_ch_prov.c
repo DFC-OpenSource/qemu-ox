@@ -114,12 +114,16 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
     if (!bad_blk) {
 
         if (vblk->blk_md->flags & APP_BLK_MD_USED) {
-             CIRCLEQ_INSERT_HEAD(&(prov->luns[lun].used_blk_head), vblk, entry);
+            CIRCLEQ_INSERT_HEAD(&(prov->luns[lun].used_blk_head), vblk, entry);
+            prov->luns[lun].nused_blks++;
 
-            if (vblk->blk_md->flags & APP_BLK_MD_OPEN)
+            if (vblk->blk_md->flags & APP_BLK_MD_OPEN) {
                 TAILQ_INSERT_HEAD(&(prov->luns[lun].open_blk_head),
                                                               vblk, open_entry);
-             return 0;
+                prov->luns[lun].nopen_blks++;
+            }
+
+            return 0;
         }
 
         rnd_vblk = ch_prov_blk_rand(lch, lun);
@@ -197,6 +201,7 @@ static void ch_prov_blk_list_free(struct app_channel *lch, int lun)
             vblk = tmp;
         }
     }
+    prov->luns[lun].nfree_blks = 0;
 
     if (prov->luns[lun].nused_blks > 0) {
         vblk = CIRCLEQ_FIRST(&(prov->luns[lun].used_blk_head));
@@ -207,6 +212,7 @@ static void ch_prov_blk_list_free(struct app_channel *lch, int lun)
             vblk = tmp;
         }
     }
+    prov->luns[lun].nused_blks = 0;
 
     if (prov->luns[lun].nopen_blks > 0) {
         vblk = TAILQ_FIRST(&(prov->luns[lun].open_blk_head));
@@ -217,6 +223,7 @@ static void ch_prov_blk_list_free(struct app_channel *lch, int lun)
             vblk = tmp;
         }
     }
+    prov->luns[lun].nopen_blks = 0;
 
     for (blk = 0; blk < nblk; blk++) {
         ch_prov_blk_free(lch, lun, blk);
@@ -294,6 +301,23 @@ static int ch_prov_exit_luns (struct app_channel *lch)
     return 0;
 }
 
+static void ch_prov_check_gc (struct app_channel *lch)
+{
+    uint16_t lun_i;
+    float tot_blk = 0, free_blk = 0;
+    struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
+    struct ch_prov_lun *p_lun;
+
+    for (lun_i = 0; lun_i < lch->ch->geometry->lun_per_ch; lun_i++) {
+        p_lun = &prov->luns[lun_i];
+        tot_blk += p_lun->nfree_blks + p_lun->nused_blks;
+        free_blk += p_lun->nfree_blks;
+    }
+
+    if (free_blk / tot_blk < APPNVM_GC_THRESD)
+        appnvm_ch_need_gc_set (lch);
+}
+
 /**
  * Gets a new block from a LUN and mark it as open.
  * If the block fails to erase, mark it as bad and try next block.
@@ -349,11 +373,15 @@ NEXT:
         }
 
         vblk->blk_md->current_pg = 0;
+        vblk->blk_md->invalid_pgs = 0;
         vblk->blk_md->flags |= (APP_BLK_MD_USED | APP_BLK_MD_OPEN);
         if (vblk->blk_md->flags & APP_BLK_MD_LINE)
             vblk->blk_md->flags ^= APP_BLK_MD_LINE;
 
         memset (vblk->blk_md->pg_state, 0x0, 64);
+
+        if (!appnvm_ch_need_gc (lch))
+            ch_prov_check_gc (lch);
 
         if (APPNVM_DEBUG) {
             printf("[appnvm (ch_prov): blk GET: (%d %d %d) - Free: %d,"
