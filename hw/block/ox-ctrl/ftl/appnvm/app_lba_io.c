@@ -45,7 +45,12 @@ struct lba_io_sec {
 struct lba_io_cmd {
     struct nvm_io_cmd            cmd;
     struct lba_io_sec           *vec[64];
+
+    /* Used to transfer the LBA to the page oob area */
+    uint8_t                     *oob_lba;
+
     struct app_prov_ppas        *prov;
+    pthread_mutex_t              mutex;
     STAILQ_ENTRY(lba_io_cmd)     fentry;
     TAILQ_ENTRY(lba_io_cmd)      uentry;
 };
@@ -55,7 +60,7 @@ struct lba_io_sec_ent {
     uint64_t ppa;
 };
 
-#define LBA_IO_ENTRIES  64
+#define LBA_IO_ENTRIES  512
 #define LBA_IO_WRITE_Q  0
 #define LBA_IO_READ_Q   1
 #define LBA_IO_QUEUE_TO 2000000
@@ -87,7 +92,8 @@ static void lba_io_reset_cmd (struct lba_io_cmd *lcmd)
 {
     memset (&lcmd->cmd, 0x0, sizeof (struct nvm_io_cmd));
     memset (lcmd->vec, 0x0, sizeof (struct lba_io_sec *) * 64);
-    lcmd->prov = 0x0;
+    lcmd->prov = NULL;
+    lcmd->oob_lba = NULL;
 }
 
 static void lba_io_callback (struct nvm_io_cmd *cmd)
@@ -119,10 +125,17 @@ COMPLETE_LBA:
         ox_mq_complete_req (lba_io_mq, lba[i]->mentry);
     }
 
-    if ((cmd->cmdtype == MMGR_WRITE_PG) && lcmd->prov)
+    pthread_mutex_lock (&lcmd->mutex);
+    if ((cmd->cmdtype == MMGR_WRITE_PG) && lcmd->prov) {
         appnvm()->gl_prov.free_ppa_list_fn (lcmd->prov);
+        lcmd->prov = NULL;
+    }
+    if (lcmd->oob_lba) {
+        free (lcmd->oob_lba);
+        lcmd->oob_lba = NULL;
+    }
+    pthread_mutex_unlock (&lcmd->mutex);
 
-    lcmd->prov = 0x0;
     pthread_spin_lock (&cmd_spin);
     TAILQ_REMOVE(&ucmdhead, lcmd, uentry);
     STAILQ_INSERT_TAIL(&fcmdhead, lcmd, fentry);
@@ -225,7 +238,7 @@ static void lba_io_prepare_cmd (struct lba_io_cmd *lcmd, uint8_t type)
 {
     uint32_t i, pg, nsec;
     struct nvm_io_cmd *cmd = &lcmd->cmd;
-    //uint64_t moff;
+    uint64_t moff, meta;
 
     cmd->cid = 0; /* Make some counter */
     cmd->sec_sz = NVME_KERNEL_PG_SIZE;
@@ -242,9 +255,12 @@ static void lba_io_prepare_cmd (struct lba_io_cmd *lcmd, uint8_t type)
     for (i = 0; i < 8; i++)
         cmd->status.pg_map[i] = 0;
 
+    /* Metadata points to command LBA array */
+    moff = (uint64_t) lcmd->oob_lba;
+    meta = moff;
+
     pg = 0;
     nsec = 0;
-    //moff = 0;//meta;
     for (i = 0; i <= cmd->n_sec; i++) {
         if ((i == cmd->n_sec) || (i && (
                       cmd->ppalist[i].g.ch != cmd->ppalist[i - 1].g.ch ||
@@ -261,11 +277,12 @@ static void lba_io_prepare_cmd (struct lba_io_cmd *lcmd, uint8_t type)
             cmd->mmgr_io[pg].sec_offset = i - nsec;
             cmd->mmgr_io[pg].sync_count = NULL;
             cmd->mmgr_io[pg].sync_mutex = NULL;
-            cmd->md_prp[pg] = 0;//(meta && meta_size) ? moff : 0;
+            cmd->mmgr_io[pg].force_sync_md = 1;
+            cmd->md_prp[pg] = (!type) ? moff : 0;
 
             pg++;
             nsec = 0;
-            //moff = 0;//meta + (oob * i);
+            moff = meta + (cmd->channel[0]->geometry->sec_oob_sz * i);
         }
         nsec++;
     }
@@ -276,22 +293,33 @@ static void lba_io_prepare_cmd (struct lba_io_cmd *lcmd, uint8_t type)
 static int lba_io_write (struct lba_io_cmd *lcmd)
 {
     struct lba_io_sec_ent *nvme_lba;
-    uint32_t sec_i, pgs;
+    uint32_t sec_i, pgs, sec_oob;
     struct nvm_io_cmd *cmd;
     struct app_prov_ppas *ppas;
     uint32_t nlb = rw_off[LBA_IO_WRITE_Q];
+    uint64_t *oob;
 
     pgs = nlb / sec_pl_pg;
     if (nlb % sec_pl_pg > 0)
         pgs++;
 
-    ppas = appnvm()->gl_prov.get_ppa_list_fn (pgs);
-    if (!ppas || ppas->nppas < nlb)
-        return 1;
-
-    lcmd->prov = ppas;
     cmd = &lcmd->cmd;
     cmd->n_sec = sec_pl_pg * pgs;
+
+    /* The OOB area is used to store the page LBA, for GC reverse mapping */
+    sec_oob = ch[0]->ch->geometry->sec_oob_sz;
+    cmd->md_sz = cmd->n_sec * sec_oob;
+    lcmd->oob_lba = malloc (cmd->md_sz);
+    if (!lcmd->oob_lba)
+        return 1;
+
+    ppas = appnvm()->gl_prov.get_ppa_list_fn (pgs);
+    if (!ppas || ppas->nppas < nlb) {
+        free (lcmd->oob_lba);
+        return 1;
+    }
+
+    lcmd->prov = ppas;
 
     for (sec_i = 0; sec_i < nlb; sec_i++) {
         rw_line[LBA_IO_WRITE_Q][sec_i]->ppa.ppa = ppas->ppa[sec_i].ppa;
@@ -301,6 +329,9 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
         cmd->channel[sec_i]     = ch[ppas->ppa[sec_i].g.ch]->ch;
 
         lcmd->vec[sec_i]        = rw_line[LBA_IO_WRITE_Q][sec_i];
+
+        oob = (uint64_t *) (lcmd->oob_lba + (sec_oob * sec_i));
+        *oob = lcmd->vec[sec_i]->lba;
 
         /* Keep the LBA/PPAs in the nvme command, in this way, if the command
         fails, no lba is upserted in the mapping table */
@@ -316,45 +347,69 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
         cmd->ppalist[sec_i].ppa = ppas->ppa[sec_i].ppa;
         cmd->prp[sec_i] = rw_line[LBA_IO_WRITE_Q][0]->prp;
         cmd->channel[sec_i] = ch[ppas->ppa[sec_i].g.ch]->ch;
+        oob = (uint64_t *) (lcmd->oob_lba + (sec_oob * sec_i));
+        *oob = 0x0;
         sec_i++;
     }
 
     lba_io_prepare_cmd (lcmd, LBA_IO_WRITE_Q);
 
     if (appnvm()->ppa_io.submit_fn (cmd)) {
+        /* TODO: Invalidate pages in blk_md for failed write */
+
         /* TODO: If PPA IO is failed, tell provisioning to recycle current
          * blocks and abort any write to the blocks, otherwise we loose the
          * sequential writes guarantee within a block. Keep track of status of
          * each LBA and recycle only necessary blocks */
-        goto FREE_PPAS;
+        goto FREE;
     }
 
     return 0;
 
-FREE_PPAS:
+FREE:
+    pthread_mutex_lock (&lcmd->mutex);
+    if (lcmd->oob_lba) {
+        free (lcmd->oob_lba);
+        lcmd->oob_lba = NULL;
+    }
     if (lcmd->prov) {
         appnvm()->gl_prov.free_ppa_list_fn (ppas);
-        lcmd->prov = 0x0;
+        lcmd->prov = NULL;
     }
+    pthread_mutex_unlock (&lcmd->mutex);
     return -1;
 }
 
 static int lba_io_read (struct lba_io_cmd *lcmd)
 {
-    uint32_t sec_i;
+    int ret;
+    uint32_t sec_i, sec_oob, pgs;
     struct nvm_io_cmd *cmd;
     uint32_t nlb = rw_off[LBA_IO_READ_Q];
     struct nvm_ppa_addr sec_ppa;
 
+    pgs = nlb / sec_pl_pg;
+    if (nlb % sec_pl_pg > 0)
+        pgs++;
+
     cmd = &lcmd->cmd;
     cmd->n_sec = nlb;
+
+    /* The OOB area is used to store the page LBA, for GC reverse mapping */
+    sec_oob = ch[0]->ch->geometry->sec_oob_sz;
+    cmd->md_sz = sec_pl_pg * pgs * sec_oob;
+    lcmd->oob_lba = malloc (cmd->md_sz);
+    if (!lcmd->oob_lba)
+        return 1;
 
     for (sec_i = 0; sec_i < nlb; sec_i++) {
 
         sec_ppa.ppa = appnvm()->gl_map.read_fn
                                           (rw_line[LBA_IO_READ_Q][sec_i]->lba);
-        if (sec_ppa.ppa == AND64)
+        if (sec_ppa.ppa == AND64) {
+            free (lcmd->oob_lba);
             return 1;
+        }
 
         rw_line[LBA_IO_READ_Q][sec_i]->ppa.ppa = sec_ppa.ppa;
         cmd->ppalist[sec_i].ppa = sec_ppa.ppa;
@@ -367,7 +422,14 @@ static int lba_io_read (struct lba_io_cmd *lcmd)
 
     lba_io_prepare_cmd (lcmd, LBA_IO_READ_Q);
 
-    return appnvm()->ppa_io.submit_fn (cmd);
+    ret = appnvm()->ppa_io.submit_fn (cmd);
+
+    pthread_mutex_lock (&lcmd->mutex);
+    if (ret && lcmd->oob_lba)
+        free (lcmd->oob_lba);
+    pthread_mutex_unlock (&lcmd->mutex);
+
+    return ret;
 }
 
 static int lba_io_rw (uint8_t type)
@@ -509,6 +571,8 @@ static void lba_io_sec_callback (void *opaque)
                                      nvme_cmd->status.status == NVM_IO_SUCCESS)
             lba_io_upsert_map (nvme_cmd);
 
+        /* TODO: Invalidate pages in blk_md for failed write */
+
         /* TODO: If nvme cmd is failed, tell provisioning to recycle current
          * block and abort any write to the blocks, otherwise we loose the
          * sequential writes guarantee within a block. Keep track of status of
@@ -529,7 +593,7 @@ ERR_TIMEOUT:
 struct ox_mq_config lba_io_mq_config = {
     /* Queue 0: write, queue 1: read */
     .n_queues   = 2,
-    .q_size     = LBA_IO_ENTRIES * 128,
+    .q_size     = 128 * 256,
     .sq_fn      = lba_io_sec_sq,
     .cq_fn      = lba_io_sec_callback,
     .to_fn      = lba_io_mq_to,
@@ -545,6 +609,7 @@ static void lba_io_free_cmd (void)
     while (!STAILQ_EMPTY(&fcmdhead)) {
         cmd = STAILQ_FIRST(&fcmdhead);
         STAILQ_REMOVE_HEAD (&fcmdhead, fentry);
+        pthread_mutex_destroy (&cmd->mutex);
         free (cmd);
     }
     while (!STAILQ_EMPTY(&flbahead)) {
@@ -590,6 +655,11 @@ static int lba_io_init (void)
         cmd = calloc (sizeof (struct lba_io_cmd), 1);
         if (!cmd)
             goto FREE_CMD;
+
+        if (pthread_mutex_init(&cmd->mutex, NULL)) {
+            free (cmd);
+            goto FREE_CMD;
+        }
 
         STAILQ_INSERT_TAIL(&fcmdhead, cmd, fentry);
 

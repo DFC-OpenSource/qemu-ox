@@ -494,16 +494,20 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
 
     /* If LBA is not new, mark old PPA page as invalid for GC */
     if (map_ent->ppa) {
+
         old_ppa.ppa = map_ent->ppa;
-        blk_md = appnvm()->md.get_fn (ch[ch_map], old_ppa.g.lun);
+        blk_md = appnvm()->md.get_fn (ch[old_ppa.g.ch], old_ppa.g.lun);
         pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg / 8];
 
         if (!(*pg_map & (1 << (old_ppa.g.pg % 8)))) {
             pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
+
             *pg_map |= (1 << (old_ppa.g.pg % 8));
-            blk_md->invalid_pgs++;
+            blk_md[old_ppa.g.blk].invalid_pgs++;
+
             pthread_spin_unlock (&md_ch_spin[old_ppa.g.ch]);
         }
+
     }
 
     /* Update mapping table entry
