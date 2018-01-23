@@ -385,16 +385,16 @@ static int app_global_init (void)
         log_err ("[appnvm: LBA I/O NOT started.\n");
         goto EXIT_GL_MAP;
     }
-
+/*
     if (appnvm()->gc.init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
         goto EXIT_LBA_IO;
     }
-
+*/
     return 0;
 
-EXIT_LBA_IO:
-    appnvm()->lba_io.exit_fn ();
+/*EXIT_LBA_IO:
+    appnvm()->lba_io.exit_fn ();*/
 EXIT_GL_MAP:
     appnvm()->gl_map.exit_fn ();
 EXIT_GL_PROV:
@@ -404,7 +404,7 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
-    appnvm()->gc.exit_fn ();
+    //appnvm()->gc.exit_fn ();
     appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
