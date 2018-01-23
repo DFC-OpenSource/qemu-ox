@@ -236,8 +236,9 @@ static void nvm_ftl_process_sq (struct ox_mq_entry *req)
     cmd->mq_req = (void *) req;
     ret = ftl->ops->submit_io(cmd);
 
-    if (ret) {
-        log_err ("[ftl: Cmd %lu (0x%x) NOT completed. ret %d]\n",cmd->cid,cmd->cmdtype, ret);
+    if (ret && core.debug) {
+        log_err ("[ftl: Cmd %lu (0x%x) NOT completed. ret %d]\n",
+                                                   cmd->cid,cmd->cmdtype, ret);
         nvm_complete_ftl(cmd);
     }
 }

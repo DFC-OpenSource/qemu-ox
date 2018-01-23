@@ -54,7 +54,7 @@
 #define MAX_NAME_SIZE           31
 #define NVM_QUEUE_RETRY         16
 #define NVM_QUEUE_RETRY_SLEEP   500
-#define NVM_FTL_QUEUE_SIZE      256
+#define NVM_FTL_QUEUE_SIZE      512
 #define NVM_FTL_QUEUE_TO        2000000
 
 #define NVM_SYNCIO_TO          10
@@ -143,6 +143,7 @@ struct nvm_mmgr_io_cmd {
     uint32_t                sec_sz;
     uint32_t                md_sz;
     uint16_t                sec_offset; /* first sector in the ppa vector */
+    uint8_t                 force_sync_md;
     u_atomic_t              *sync_count;
     pthread_mutex_t         *sync_mutex;
     struct timeval          tstart;

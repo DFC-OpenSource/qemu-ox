@@ -179,6 +179,7 @@ static int lnvm_check_pg_io (struct nvm_io_cmd *cmd, uint8_t index)
     mio->n_sectors = mio->pg_sz / mio->sec_sz;
 
     mio->md_prp = cmd->md_prp[index];
+    mio->force_sync_md = 0;
 
     return 0;
 }
