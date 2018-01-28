@@ -96,14 +96,28 @@ struct app_bbtbl {
     uint8_t  *tbl;
 };
 
+struct app_pg_oob {
+    uint64_t    lba;
+    uint8_t     pg_type;
+    uint8_t     rsv[3];
+} __attribute__((packed));
+
 struct app_io_data {
     struct app_channel *lch;
     struct nvm_channel *ch;
     uint8_t             n_pl;
     uint32_t            pg_sz;
     uint8_t             *buf;
+    uint8_t             **buf_vec;
+    uint8_t             **oob_vec;
     uint32_t            meta_sz;
     uint32_t            buf_sz;
+};
+
+enum app_pg_type {
+    APP_PG_RESERVED  = 0x0,
+    APP_PG_NAMESPACE = 0x1,
+    APP_PG_MAP       = 0x2
 };
 
 enum app_blk_md_flags {
@@ -118,8 +132,9 @@ struct app_blk_md_entry {
     uint32_t                erase_count;
     uint16_t                current_pg;
     uint16_t                invalid_pgs;
-    uint8_t                 pg_state[64]; /* maximum of 512 pages per blk */
-} __attribute__((packed));   /* 82 bytes per entry */
+    /* maximum of 512 pages per blk and 16 sectors per pg */
+    uint8_t                pg_state[64];
+} __attribute__((packed));   /* 1042 bytes per entry */
 
 struct app_blk_md {
     uint8_t  magic;

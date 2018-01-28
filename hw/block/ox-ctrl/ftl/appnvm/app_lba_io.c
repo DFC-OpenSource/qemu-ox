@@ -329,7 +329,7 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
     struct nvm_io_cmd *cmd;
     struct app_prov_ppas *ppas;
     uint32_t nlb = rw_off[LBA_IO_WRITE_Q];
-    uint64_t *oob;
+    struct app_pg_oob *oob;
 
     pgs = nlb / sec_pl_pg;
     if (nlb % sec_pl_pg > 0)
@@ -362,8 +362,9 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
 
         lcmd->vec[sec_i]        = rw_line[LBA_IO_WRITE_Q][sec_i];
 
-        oob = (uint64_t *) (lcmd->oob_lba + (sec_oob * sec_i));
-        *oob = lcmd->vec[sec_i]->lba;
+        oob = (struct app_pg_oob *) (lcmd->oob_lba + (sec_oob * sec_i));
+        oob->lba = lcmd->vec[sec_i]->lba;
+        oob->pg_type = APP_PG_NAMESPACE;
 
         /* Keep the LBA/PPAs in the nvme command, in this way, if the command
         fails, no lba is upserted in the mapping table */
@@ -380,8 +381,8 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
         cmd->ppalist[sec_i].ppa = ppas->ppa[sec_i].ppa;
         cmd->prp[sec_i] = rw_line[LBA_IO_WRITE_Q][0]->prp;
         cmd->channel[sec_i] = ch[ppas->ppa[sec_i].g.ch]->ch;
-        oob = (uint64_t *) (lcmd->oob_lba + (sec_oob * sec_i));
-        *oob = 0x0;
+        oob = (struct app_pg_oob *) (lcmd->oob_lba + (sec_oob * sec_i));
+        memset (oob, 0x0, sizeof (struct app_pg_oob));
         sec_i++;
     }
 

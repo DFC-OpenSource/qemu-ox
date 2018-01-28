@@ -45,6 +45,8 @@ struct app_global *appnvm (void) {
 struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
 {
     struct app_io_data *data;
+    struct nvm_mmgr_geometry *g;
+    uint16_t pl, sec;
 
     data = malloc (sizeof (struct app_io_data));
     if (!data)
@@ -52,23 +54,48 @@ struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
 
     data->lch = lch;
     data->ch = lch->ch;
-    data->n_pl = data->ch->geometry->n_of_planes;
-    data->pg_sz = data->ch->geometry->pg_size;
-    data->meta_sz = data->ch->geometry->sec_oob_sz *
-                                                data->ch->geometry->sec_per_pg;
+    g = data->ch->geometry;
+    data->n_pl = g->n_of_planes;
+    data->pg_sz = g->pg_size;
+    data->meta_sz = g->sec_oob_sz * g->sec_per_pg;
     data->buf_sz = (data->pg_sz + data->meta_sz) * data->n_pl;
 
     data->buf = calloc(data->buf_sz, 1);
-    if (!data->buf) {
-        free (data);
-        return NULL;
-    }
+    if (!data->buf)
+        goto FREE;
+
+    data->buf_vec = malloc (sizeof (uint8_t *) * data->n_pl);
+    if (!data->buf_vec)
+        goto FREE_BUF;
+
+    for (pl = 0; pl < data->n_pl; pl++)
+        data->buf_vec[pl] = data->buf +
+                      ((uint32_t) pl * (data->buf_sz / (uint32_t) data->n_pl));
+
+    data->oob_vec = malloc (sizeof (uint8_t *) * g->sec_per_pl_pg);
+    if (!data->oob_vec)
+        goto FREE_VEC;
+
+    for (pl = 0; pl < data->n_pl; pl++)
+        for (sec = 0; sec < g->sec_per_pg; sec++)
+            data->oob_vec[g->sec_per_pg * pl + sec] =
+                        data->buf_vec[pl] + data->pg_sz + (g->sec_oob_sz * sec);
 
     return data;
+
+FREE_VEC:
+    free (data->buf_vec);
+FREE_BUF:
+    free (data->buf);
+FREE:
+    free (data);
+    return NULL;
 }
 
 void app_free_pg_io (struct app_io_data *data)
 {
+    free (data->oob_vec);
+    free (data->buf_vec);
     free (data->buf);
     free (data);
 }
@@ -76,7 +103,7 @@ void app_free_pg_io (struct app_io_data *data)
 int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
                                               uint16_t blk_id, uint16_t offset)
 {
-    int i, pg, ret, fr = 0;
+    int pg, ret, fr = 0;
     struct app_magic oob;
 
     if (io == NULL) {
@@ -86,16 +113,12 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
         fr++;
     }
 
-    uint8_t *buf_vec[io->n_pl];
-
-    for (i = 0; i < io->n_pl; i++)
-        buf_vec[i] = io->buf + i * (io->buf_sz / io->n_pl);
-
     /* Finds the location of the newest data by checking APP_MAGIC */
     pg = 0;
     do {
         memset (io->buf, 0, io->buf_sz);
-        ret = app_io_rsv_blk (lch, MMGR_READ_PG, (void **) buf_vec, blk_id, pg);
+        ret = app_io_rsv_blk (lch, MMGR_READ_PG,
+                                            (void **) io->buf_vec, blk_id, pg);
 
         /* get info from OOB area in plane 0 */
         memcpy(&oob, io->buf + io->pg_sz, sizeof(struct app_magic));
@@ -152,10 +175,6 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
     uint8_t *from, *to;
     struct nvm_ppa_addr ppa_io;
 
-    uint8_t *buf_vec[io->n_pl];
-    for (i = 0; i < io->n_pl; i++)
-        buf_vec[i] = io->buf + i * (io->buf_sz / io->n_pl);
-
     pg_ent_sz = ent_per_pg * entry_sz;
     memcpy (&ppa_io, ppa, sizeof(struct nvm_ppa_addr));
     start_pg = ppa_io.g.pg;
@@ -164,7 +183,7 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
     for (i = 0; i < pgs; i++) {
         ppa_io.g.pg = start_pg + i;
         if (direction == APP_TRANS_FROM_NVM)
-            if (app_pg_io_switch (io->lch, MMGR_READ_PG, (void **) buf_vec,
+            if (app_pg_io_switch (io->lch, MMGR_READ_PG, (void **) io->buf_vec,
                                                             &ppa_io, reserved))
                 return -1;
 
@@ -176,10 +195,10 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
 
             from = (direction == APP_TRANS_TO_NVM) ?
                 user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl)) :
-                buf_vec[pl];
+                io->buf_vec[pl];
 
             to = (direction == APP_TRANS_TO_NVM) ?
-                buf_vec[pl] :
+                io->buf_vec[pl] :
                 user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl));
 
             memcpy(to, from, trf_sz);
@@ -192,7 +211,7 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
         }
 
         if (direction == APP_TRANS_TO_NVM)
-            if (app_pg_io_switch (io->lch, MMGR_WRITE_PG, (void **) buf_vec,
+            if (app_pg_io_switch (io->lch, MMGR_WRITE_PG, (void **) io->buf_vec,
                                                             &ppa_io, reserved))
                 return -1;
     }

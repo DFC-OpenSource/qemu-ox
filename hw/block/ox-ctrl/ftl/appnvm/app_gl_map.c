@@ -89,13 +89,14 @@ static uint64_t             ent_per_pg;
  *    ensures the mapping table I/Os follow the same provisioning strategy than
  *    the rest of the FTL.
  */
-static int map_nvm_write (struct map_cache_entry *ent)
+
+static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
 {
     struct app_prov_ppas *prov_ppa;
     struct app_channel *lch;
     struct nvm_ppa_addr *addr;
     struct app_io_data *io;
-    int ret = -1;
+    int sec, ret = -1;
 
     prov_ppa = appnvm()->gl_prov.get_ppa_list_fn (1);
     if (!prov_ppa) {
@@ -103,7 +104,7 @@ static int map_nvm_write (struct map_cache_entry *ent)
         return -1;
     }
 
-    if (prov_ppa->nppas != prov_ppa->ch[0]->ch->geometry->sec_per_pl_pg)
+    if (prov_ppa->nppas != ch[0]->ch->geometry->sec_per_pl_pg)
         log_err ("[appnvm (gl_map): NVM write. wrong PPAs. nppas %d]",
                                                               prov_ppa->nppas);
 
@@ -112,6 +113,11 @@ static int map_nvm_write (struct map_cache_entry *ent)
     io = app_alloc_pg_io(lch);
     if (io == NULL)
         goto FREE_PPA;
+
+    for (sec = 0; sec < io->ch->geometry->sec_per_pl_pg; sec++) {
+        ((struct app_pg_oob *) io->oob_vec[sec])->lba = lba;
+        ((struct app_pg_oob *) io->oob_vec[sec])->pg_type = APP_PG_MAP;
+    }
 
     ret = app_nvm_seq_transfer (io, addr, ent->buf, 1, ent_per_pg,
                             ent_per_pg, sizeof(struct app_map_entry),
@@ -159,6 +165,7 @@ static int map_nvm_read (struct map_cache_entry *ent)
 
 static int map_evict_pg_cache (struct map_cache *cache)
 {
+    uint64_t lba;
     struct map_cache_entry *cache_ent;
 
     cache_ent = TAILQ_FIRST(&cache->mbu_head);
@@ -173,7 +180,9 @@ static int map_evict_pg_cache (struct map_cache *cache)
     pthread_spin_unlock (&cache->mb_spin);
 
     if (cache_ent->dirty) {
-        if (map_nvm_write (cache_ent)) {
+        lba = (uint64_t) (ch[cache->id]->map_md->entries * cache->id) +
+                                                      cache_ent->md_entry->lba;
+        if (map_nvm_write (cache_ent, lba)) {
 
             pthread_spin_lock (&cache->mb_spin);
             TAILQ_INSERT_HEAD(&cache->mbu_head, cache_ent, u_entry);
