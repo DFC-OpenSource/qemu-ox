@@ -470,7 +470,7 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
     uint32_t ch_map, ent_off;
     struct app_map_entry *map_ent;
     struct map_cache_entry *cache_ent;
-    struct nvm_ppa_addr old_ppa;
+    struct nvm_ppa_addr old_ppa, addr;
     struct app_blk_md_entry *blk_md;
 
     ch_map = (lba / ent_per_pg) % app_nch;
@@ -487,15 +487,18 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
     map_ent = &((struct app_map_entry *) cache_ent->buf)[ent_off];
 
     if (map_ent->lba != lba) {
-        log_err ("[appnvm(gl_map): LBA does not match entry. lba: %lu, "
-                            "map lba: %lu, Ch %d\n", lba, map_ent->lba, ch_map);
+        addr.ppa = map_ent->ppa;
+        log_err ("[appnvm(gl_map): WRITE LBA does not match entry. lba: %lu, "
+            "map lba: %lu, map ppa: (%d/%d/%d/%d/%d/%d), Ch %d, ent_off %d\n",
+            lba, map_ent->lba, addr.g.ch, addr.g.lun, addr.g.blk, addr.g.pl,
+            addr.g.pg, addr.g.sec, ch_map, ent_off);
         return -1;
     }
 
     /* If LBA is not new, mark old PPA page as invalid for GC */
+    old_ppa.ppa = map_ent->ppa;
     if (map_ent->ppa) {
 
-        old_ppa.ppa = map_ent->ppa;
         blk_md = appnvm()->md.get_fn (ch[old_ppa.g.ch], old_ppa.g.lun);
         pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg / 8];
 
@@ -510,10 +513,10 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
 
     }
 
-    /* Update mapping table entry
-       We use no lock here, only 1 thread should update a specific LBA */
+    pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
     map_ent->ppa = ppa;
     cache_ent->dirty = 1;
+    pthread_spin_unlock (&md_ch_spin[old_ppa.g.ch]);
 
     return 0;
 }
@@ -522,6 +525,7 @@ static uint64_t map_read (uint64_t lba)
 {
     struct map_cache_entry *cache_ent;
     struct app_map_entry *map_ent;
+    struct nvm_ppa_addr ppa;
     uint32_t ent_off;
 
     ent_off = lba % ent_per_pg;
@@ -535,6 +539,15 @@ static uint64_t map_read (uint64_t lba)
         return AND64;
 
     map_ent = &((struct app_map_entry *) cache_ent->buf)[ent_off];
+
+    if (map_ent->lba != lba) {
+        ppa.ppa = map_ent->ppa;
+        log_err ("[appnvm(gl_map): READ LBA does not match entry. lba: %lu, "
+            "map lba: %lu, map ppa: (%d/%d/%d/%d/%d/%d), ent_off %d\n",
+                lba, map_ent->lba, ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl,
+                ppa.g.pg, ppa.g.sec, ent_off);
+        return -1;
+    }
 
     return map_ent->ppa;
 }

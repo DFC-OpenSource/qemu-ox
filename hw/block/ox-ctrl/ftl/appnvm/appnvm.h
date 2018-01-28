@@ -43,8 +43,11 @@
 #define APP_IO_NORMAL   0
 #define APP_IO_RESERVED 1 /* Used for FTL reerved blocks */
 
-#define APPNVM_FLUSH_RETRY  3
-#define APPNVM_GC_THRESD    0.3
+#define APPNVM_FLUSH_RETRY      3
+#define APPNVM_GC_THRESD        0.5
+#define APPNVM_GC_TARGET_RATE   0.9
+#define APPNVM_GC_MAX_BLKS      30
+#define APPNVM_GC_MIN_FREE_BLKS 4
 
 #define APPNVM_DEBUG       0
 

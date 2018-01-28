@@ -301,7 +301,7 @@ static int ch_prov_exit_luns (struct app_channel *lch)
     return 0;
 }
 
-static void ch_prov_check_gc (struct app_channel *lch)
+static int ch_prov_check_gc (struct app_channel *lch)
 {
     uint16_t lun_i;
     float tot_blk = 0, free_blk = 0;
@@ -314,8 +314,17 @@ static void ch_prov_check_gc (struct app_channel *lch)
         free_blk += p_lun->nfree_blks;
     }
 
+    /* If the channel runs out of blocks, disable channel and
+                                              leave a block left for GC usage*/
+   /* if (free_blk < APPNVM_GC_MIN_FREE_BLKS) {
+        appnvm_ch_active_unset (lch);
+        return -1;
+    }
+   */
     if (free_blk / tot_blk < APPNVM_GC_THRESD)
         appnvm_ch_need_gc_set (lch);
+
+    return 0;
 }
 
 /**
@@ -330,6 +339,9 @@ static struct ch_prov_blk *ch_prov_blk_get (struct app_channel *lch, int lun)
     struct nvm_mmgr_io_cmd *cmd;
     struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
     struct ch_prov_lun *p_lun = &prov->luns[lun];
+
+    if (ch_prov_check_gc (lch))
+        return NULL;
 
 NEXT:
     if (p_lun->nfree_blks > 0) {
@@ -380,14 +392,11 @@ NEXT:
 
         memset (vblk->blk_md->pg_state, 0x0, 64);
 
-        if (!appnvm_ch_need_gc (lch))
-            ch_prov_check_gc (lch);
-
         if (APPNVM_DEBUG) {
-            printf("[appnvm (ch_prov): blk GET: (%d %d %d) - Free: %d,"
+            printf("[appnvm (ch_prov): blk GET: (%d/%d/%d/%d) - Free: %d,"
                     " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
-                    vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
-                                                         p_lun->nopen_blks);
+                    vblk->addr.g.blk, vblk->blk_md->erase_count,
+                    p_lun->nfree_blks, p_lun->nused_blks, p_lun->nopen_blks);
         }
 
         return vblk;
@@ -410,7 +419,7 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
         return -1;
 
     if (vblk->blk_md->flags & APP_BLK_MD_OPEN)
-        return -1;
+        return -2;
 
     pthread_mutex_lock(&prov->ch_mutex);
 

@@ -112,6 +112,10 @@ static struct app_prov_ppas *gl_prov_get_ppa_list (uint32_t pgs)
         prov_ppa->ch[ch_id] = NULL;
         dec_ch[ch_id] = NULL;
     }
+
+    if (APPNVM_DEBUG)
+        printf ("\n[appnvm (gl_prov): Active Channels: %d]\n", nact_ch);
+
     if (!nact_ch)
         return NULL;
 
