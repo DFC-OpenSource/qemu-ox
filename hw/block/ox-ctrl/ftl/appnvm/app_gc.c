@@ -47,7 +47,6 @@ static uint32_t recycled_blks;
 static uint64_t moved_sec;
 
 extern pthread_mutex_t gc_ns_mutex;
-extern pthread_mutex_t gc_map_mutex;
 extern pthread_spinlock_t *md_ch_spin;
 
 struct gc_th_arg {
@@ -348,7 +347,7 @@ static int gc_upsert_sector (struct app_channel *lch,
 {
     uint8_t *pg_map;
     struct nvm_ppa_addr read_ppa;
-    int ret = oob->lba;
+    int ret = 0;
 
     pg_map = &blk_md->pg_state[old_ppa->g.pg * lch->ch->geometry->n_of_planes];
 
@@ -357,7 +356,12 @@ static int gc_upsert_sector (struct app_channel *lch,
         switch (oob->pg_type) {
             case APP_PG_MAP:
 
-                log_info (" GC MAP PAGE UPDATE\n");
+                log_info (" GC MAP PAGE UPDATE index %lu\n", oob->lba);
+
+                if (appnvm()->gl_map.upsert_md_fn (oob->lba, new_ppa->ppa,
+                                                                 old_ppa->ppa))
+                    goto INVALID;
+
                 return 0;
 
             case APP_PG_NAMESPACE:
@@ -367,7 +371,6 @@ static int gc_upsert_sector (struct app_channel *lch,
 
                 if (read_ppa.ppa != old_ppa->ppa) {
                     pthread_mutex_unlock (&gc_ns_mutex);
-                    ret = 0;
                     goto INVALID;
                 }
 
@@ -381,20 +384,46 @@ static int gc_upsert_sector (struct app_channel *lch,
 
                 return 0;
 
-            default:
-                ret = 0;
+            case APP_PG_PADDING:
+                log_info (" GC PADDING PAGE UPDATE\n");
                 goto INVALID;
-        }
 
-    } else {
-        ret = 0;
-        goto INVALID;
+            default:
+                log_info ("[gc: Unknown data type (%d). LBA %lu, PPA "
+                        "(%d/%d/%d/%d/%d/%d)\n", oob->pg_type, oob->lba,
+                        old_ppa->g.ch, old_ppa->g.lun, old_ppa->g.blk,
+                        old_ppa->g.pl, old_ppa->g.pg, old_ppa->g.sec);
+        }
     }
 
 INVALID:
     gc_invalidate_sector (new_ppa);
     old_ppa->ppa = 0x0;
     return ret;
+}
+
+static void gc_rollback_upserted_sectors (struct nvm_ppa_addr **ppa_list,
+                                                   uint32_t nsec, uint16_t tid)
+{
+    uint32_t sec, pg;
+    struct nvm_ppa_addr *old_ppa;
+    struct nvm_mmgr_geometry *geo = ch[0]->ch->geometry;
+    struct app_io_data *io;
+    struct app_pg_oob *oob;
+
+    while (nsec) {
+        nsec--;
+        pg  = nsec / geo->sec_per_pl_pg;
+        sec = nsec % geo->sec_per_pl_pg;
+        old_ppa = &ppa_list[pg][geo->sec_per_pl_pg + sec];
+        io   = (struct app_io_data *) gc_buf[tid][pg];
+        oob  = (struct app_pg_oob *) io->oob_vec[sec];
+
+        if (old_ppa->ppa)
+            if (appnvm()->gl_map.upsert_fn (oob->lba, old_ppa->ppa))
+                log_err ("[gc: Failed to rollback upserted LBAs. "
+                            "LBA: %lu, old_ppa: %lx]", oob->lba, old_ppa->ppa);
+    }
 }
 
 static int gc_upsert_blk_map (struct app_channel *lch,
@@ -426,20 +455,7 @@ static int gc_upsert_blk_map (struct app_channel *lch,
     return 0;
 
 ROLLBACK:
-    while (sec_i) {
-        sec_i--;
-        pg  = sec_i / geo->sec_per_pl_pg;
-        sec = sec_i % geo->sec_per_pl_pg;
-        old_ppa = &ppa_list[pg][geo->sec_per_pl_pg + sec];
-        io   = (struct app_io_data *) gc_buf[tid][pg];
-        oob  = (struct app_pg_oob *) io->oob_vec[sec];
-
-        if (old_ppa->ppa)
-            if (appnvm()->gl_map.upsert_fn (oob->lba, old_ppa->ppa))
-                log_err ("[gc: Failed to rollback upserted LBAs. "
-                            "LBA: %lu, old_ppa: %lx]", oob->lba, old_ppa->ppa);
-    }
-
+    gc_rollback_upserted_sectors (ppa_list, sec_i, tid);
     return -1;
 }
 
@@ -464,30 +480,32 @@ static int gc_recycle_blks (struct app_blk_md_entry **list, uint32_t count,
     for (blk_i = 0; blk_i < count; blk_i++) {
         lch = ch[list[blk_i]->ppa.g.ch];
 
-        /* Read all invalid pages in the blk from NVM to the buffer */
+        /* Read all valid pages in the blk from NVM to the buffer */
         if (gc_read_blk (lch, list[blk_i], tid)) {
             log_err ("[appnvm (gc): Read block failed.]");
             continue;
         }
 
-        /* Write all invalid pages from the buffer to new NVM PPAs */
+        /* Write all valid sectors from the buffer to new NVM PPAs */
         blk_sec = gc_write_blk (lch, list[blk_i], ppa_list, tid);
         if (blk_sec < 0) {
             log_err ("[appnvm (gc): Write block failed.]");
             continue;
         }
 
+        /* Upsert all valid sectors in the mapping table */
         if (gc_upsert_blk_map (lch, list[blk_i], ppa_list, blk_sec, tid)) {
             log_err ("[appnvm (gc): Mapping upsert failed.]");
             gc_invalidate_err_pgs (lch, ppa_list);
             continue;
         }
 
+        /* Put the block back in the channel provisioning */
         if (appnvm()->ch_prov.put_blk_fn (lch, list[blk_i]->ppa.g.lun,
                                                      list[blk_i]->ppa.g.blk)) {
             log_err ("[appnvm (gc): Put block failed.]");
+            gc_rollback_upserted_sectors (ppa_list, blk_sec, tid);
             gc_invalidate_err_pgs (lch, ppa_list);
-            /* TODO: Return upserted sectors to previous state */
             continue;
         }
 
@@ -533,11 +551,11 @@ static void *gc_run_ch (void *arg)
                                                  recycled, victims - recycled);
 
             if (APP_GC_DEBUG)
-                printf ("\nGC ch %d: (%d/%d) %lu MB - Total: (%d/%lu) %lu MB\n",
+                printf (" GC (%d): (%d/%d) %.2f MB - Total: (%d/%lu) %.2f MB\n",
                    lch->app_ch_id, recycled, blk_sec,
-                   (lch->ch->geometry->sec_size * (uint64_t) blk_sec) / 1024,
+                   (4.0 * (double) blk_sec) / (double) 1024,
                    recycled_blks, moved_sec,
-                   (lch->ch->geometry->sec_size * (uint64_t) moved_sec) / 1024);
+                   (4.0 * (double) moved_sec) / (double) 1024);
         } else {
             usleep (APP_GC_DELAY_CH_BUSY);
         }
