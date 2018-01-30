@@ -221,7 +221,7 @@ static int lba_io_submit (struct nvm_io_cmd *cmd)
 
 REQUEUE_UNPROCESSED:
     cmd->status.status = NVM_IO_FAIL;
-    cmd->status.nvme_status = NVME_CAP_EXCEEDED;
+    cmd->status.nvme_status = NVME_INTERNAL_DEV_ERROR;
 
     /* If at least 1 lba has been enqueued, let the callback
                                 completing the nvme cmd by returning success */
@@ -251,7 +251,7 @@ REQUEUE:
         pthread_spin_unlock (&sec_spin);
     }
     cmd->status.status = NVM_IO_FAIL;
-    cmd->status.nvme_status = NVME_CAP_EXCEEDED;
+    cmd->status.nvme_status = NVME_INTERNAL_DEV_ERROR;
     return -1;
 }
 
@@ -392,7 +392,8 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
         cmd->prp[sec_i] = rw_line[LBA_IO_WRITE_Q][0]->prp;
         cmd->channel[sec_i] = ch[ppas->ppa[sec_i].g.ch]->ch;
         oob = (struct app_pg_oob *) (lcmd->oob_lba + (sec_oob * sec_i));
-        memset (oob, 0x0, sizeof (struct app_pg_oob));
+        oob->lba = AND64;
+        oob->pg_type = APP_PG_PADDING;
         sec_i++;
     }
 

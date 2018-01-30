@@ -277,6 +277,15 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
     LIST_INSERT_HEAD(&app_ch_head, lch, entry);
     lch->app_ch_id = id;
 
+    lch->flags.busy.counter = U_ATOMIC_INIT_RUNTIME(0);
+    pthread_spin_init (&lch->flags.busy_spin, 0);
+    pthread_spin_init (&lch->flags.active_spin, 0);
+    pthread_spin_init (&lch->flags.need_gc_spin, 0);
+
+    /* Enabled channel and no need for GC */
+    appnvm_ch_active_set (lch);
+    appnvm_ch_need_gc_unset (lch);
+
     if (app_reserve_blks (lch))
         goto FREE_LCH;
 
@@ -347,6 +356,9 @@ static void channels_exit (struct app_channel *lch)
     app_exit_bbt (lch);
 
     LIST_REMOVE (lch, entry);
+    pthread_spin_destroy (&lch->flags.busy_spin);
+    pthread_spin_destroy (&lch->flags.active_spin);
+    pthread_spin_destroy (&lch->flags.need_gc_spin);
     free(lch);
 }
 

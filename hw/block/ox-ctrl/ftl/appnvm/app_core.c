@@ -37,7 +37,6 @@ static uint8_t gl_fn; /* Positive if global function has been called */
 uint16_t app_nch;
 
 pthread_mutex_t gc_ns_mutex;
-pthread_mutex_t gc_map_mutex;
 
 static int app_submit_io (struct nvm_io_cmd *);
 
@@ -334,21 +333,10 @@ static int app_submit_io (struct nvm_io_cmd *cmd)
 static int app_init_channel (struct nvm_channel *ch)
 {
     int ret;
-    struct app_channel *lch;
 
     ret = appnvm()->channels.init_fn (ch, app_nch);
     if (ret)
         return ret;
-
-    lch = appnvm()->channels.get_fn (app_nch);
-    lch->flags.busy.counter = U_ATOMIC_INIT_RUNTIME(0);
-    pthread_spin_init (&lch->flags.busy_spin, 0);
-    pthread_spin_init (&lch->flags.active_spin, 0);
-    pthread_spin_init (&lch->flags.need_gc_spin, 0);
-
-    /* Enabled channel and no need for GC */
-    appnvm_ch_active_set (lch);
-    appnvm_ch_need_gc_unset (lch);
 
     app_nch++;
 
@@ -419,9 +407,6 @@ static void app_exit (void)
             }
         } while (nth && retry < 200); /* Waiting max of 1 second */
 
-        pthread_spin_destroy (&lch[i]->flags.busy_spin);
-        pthread_spin_destroy (&lch[i]->flags.active_spin);
-        pthread_spin_destroy (&lch[i]->flags.need_gc_spin);
         appnvm()->channels.exit_fn (lch[i]);
         app_nch--;
     }
@@ -447,20 +432,15 @@ static int app_global_init (void)
     if (pthread_mutex_init (&gc_ns_mutex, NULL))
         goto EXIT_LBA_IO;
 
-    if (pthread_mutex_init (&gc_map_mutex, NULL))
-        goto NS_MUTEX;
-
     /*if (appnvm()->gc.init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
-        goto MAP_MUTEX;
+        goto NS_MUTEX;
     }*/
 
     return 0;
 
-/*MAP_MUTEX:
-    pthread_mutex_destroy (&gc_map_mutex);*/
-NS_MUTEX:
-    pthread_mutex_destroy (&gc_ns_mutex);
+/*NS_MUTEX:
+    pthread_mutex_destroy (&gc_ns_mutex);*/
 EXIT_LBA_IO:
     appnvm()->lba_io.exit_fn ();
 EXIT_GL_MAP:
@@ -473,7 +453,6 @@ EXIT_GL_PROV:
 static void app_global_exit (void)
 {
     //appnvm()->gc.exit_fn ();
-    pthread_mutex_destroy (&gc_map_mutex);
     pthread_mutex_destroy (&gc_ns_mutex);
     appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();

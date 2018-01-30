@@ -234,10 +234,22 @@ static void nvm_ftl_process_sq (struct ox_mq_entry *req)
 {
     struct nvm_io_cmd *cmd = (struct nvm_io_cmd *) req->opaque;
     struct nvm_ftl *ftl = cmd->channel[0]->ftl;
-    int ret;
+    int ret, retry;
 
     cmd->mq_req = (void *) req;
-    ret = ftl->ops->submit_io(cmd);
+
+    retry = NVM_QUEUE_RETRY;
+    do {
+        ret = ftl->ops->submit_io(cmd);
+        if (ret) {
+            retry--;
+            usleep (NVM_QUEUE_RETRY_SLEEP);
+            if (retry) {
+                cmd->status.nvme_status = NVME_SUCCESS;
+                cmd->status.status = NVM_IO_PROCESS;
+            }
+        }
+    } while (ret && retry);
 
     if (ret) {
         if (core.debug)

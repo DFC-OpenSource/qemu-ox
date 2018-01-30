@@ -41,13 +41,13 @@
 #define APP_TRANS_FROM_NVM  1
 
 #define APP_IO_NORMAL   0
-#define APP_IO_RESERVED 1 /* Used for FTL reerved blocks */
+#define APP_IO_RESERVED 1 /* Used for FTL reserved blocks */
 
 #define APPNVM_FLUSH_RETRY      3
 #define APPNVM_GC_THRESD        0.6
 #define APPNVM_GC_TARGET_RATE   0.9
 #define APPNVM_GC_MAX_BLKS      25
-#define APPNVM_GC_OVERPROV      0
+#define APPNVM_GC_OVERPROV      0.1
 
 #define APPNVM_DEBUG       0
 
@@ -73,9 +73,9 @@ enum app_bbt_state {
     NVM_BBT_HMRK = 0x8  // Block has been marked by host side
 };
 
-#define APP_BBT_EMERGENCY   0x0 // Creates the bbt without erasing the channel
-#define APP_BBT_ERASE       0x1 // Checks for bad blocks only erasing the block
-#define APP_BBT_FULL        0x2 // Checks for bad blocks erasing the block,
+#define APP_BBT_EMERGENCY   0x0  // Creates the bbt without erasing the channel
+#define APP_BBT_ERASE       0x1  // Checks for bad blocks only erasing the block
+#define APP_BBT_FULL        0x2  // Checks for bad blocks erasing the block,
                                  //   writing and reading all pages,
                                  //   and comparing the buffers
 
@@ -118,7 +118,8 @@ struct app_io_data {
 enum app_pg_type {
     APP_PG_RESERVED  = 0x0,
     APP_PG_NAMESPACE = 0x1,
-    APP_PG_MAP       = 0x2
+    APP_PG_MAP       = 0x2,
+    APP_PG_PADDING   = 0x3
 };
 
 enum app_blk_md_flags {
@@ -223,6 +224,8 @@ typedef int         (app_gl_map_init) (void);
 typedef void        (app_gl_map_exit) (void);
 typedef int         (app_gl_map_upsert) (uint64_t lba, uint64_t ppa);
 typedef uint64_t    (app_gl_map_read) (uint64_t lba);
+typedef int         (app_gl_map_upsert_md) (uint64_t index, uint64_t new_ppa,
+                                                              uint64_t old_ppa);
 
 typedef int  (app_ppa_io_submit) (struct nvm_io_cmd *);
 typedef void (app_ppa_io_callback) (struct nvm_mmgr_io_cmd *);
@@ -279,10 +282,11 @@ struct app_ch_map {
 };
 
 struct app_gl_map {
-    app_gl_map_init    *init_fn;
-    app_gl_map_exit    *exit_fn;
-    app_gl_map_upsert  *upsert_fn;
-    app_gl_map_read    *read_fn;
+    app_gl_map_init      *init_fn;
+    app_gl_map_exit      *exit_fn;
+    app_gl_map_upsert_md *upsert_md_fn;
+    app_gl_map_upsert    *upsert_fn;
+    app_gl_map_read      *read_fn;
 };
 
 struct app_ppa_io {

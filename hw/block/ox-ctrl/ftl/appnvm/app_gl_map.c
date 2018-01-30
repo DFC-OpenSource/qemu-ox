@@ -473,6 +473,48 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
     return cache_ent;
 }
 
+static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
+{
+    uint32_t ch_map, pg_off;
+    struct app_map_entry *md_ent;
+    struct map_cache_entry *cache_ent;
+    struct map_pg_addr *addr;
+    int ret = 0;
+
+    ch_map = index % app_nch;
+    pg_off = index / app_nch;
+
+    md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
+    if (!md_ent) {
+        log_err ("[appnvm (gl_map): MD page out of bounds. Index %lu\n", index);
+        return -1;
+    }
+
+    addr = (struct map_pg_addr *) &md_ent->ppa;
+
+    /* If the PPA flag is zero, the mapping page is not cached */
+    pthread_mutex_lock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
+    if (!addr->g.flag) {
+
+        if (md_ent->ppa != old_ppa)
+            ret = -1;
+        else
+            md_ent->ppa = new_ppa;
+
+    } else {
+
+        cache_ent = (struct map_cache_entry *) ((uint64_t) addr->g.addr);
+        if (cache_ent->ppa.ppa != old_ppa)
+            ret = -1;
+        else
+            cache_ent->ppa.ppa = new_ppa;
+
+    }
+    pthread_mutex_unlock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
+
+    return ret;
+}
+
 static int map_upsert (uint64_t lba, uint64_t ppa)
 {
     uint8_t *pg_map;
@@ -564,8 +606,9 @@ static uint64_t map_read (uint64_t lba)
 }
 
 void gl_map_register (void) {
-    appnvm()->gl_map.init_fn   = map_init;
-    appnvm()->gl_map.exit_fn   = map_exit;
-    appnvm()->gl_map.upsert_fn = map_upsert;
-    appnvm()->gl_map.read_fn   = map_read;
+    appnvm()->gl_map.init_fn        = map_init;
+    appnvm()->gl_map.exit_fn        = map_exit;
+    appnvm()->gl_map.upsert_md_fn   = map_upsert_md;
+    appnvm()->gl_map.upsert_fn      = map_upsert;
+    appnvm()->gl_map.read_fn        = map_read;
 }
