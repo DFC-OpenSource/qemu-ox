@@ -187,11 +187,13 @@ enum {
 };
 
 enum {
-    MMGR_READ_PG =   0x1,
-    MMGR_READ_OOB =  0x2,
-    MMGR_WRITE_PG =  0x3,
-    MMGR_BAD_BLK =   0x5,
+    MMGR_READ_PG   = 0x1,
+    MMGR_READ_OOB  = 0x2,
+    MMGR_WRITE_PG  = 0x3,
+    MMGR_BAD_BLK   = 0x5,
     MMGR_ERASE_BLK = 0x7,
+    MMGR_READ_SGL  = 0x8,
+    MMGR_WRITE_SGL = 0x9
 };
 
 enum NVM_ERROR {
@@ -262,6 +264,7 @@ struct nvm_mmgr_geometry {
     uint64_t    tot_pg;
     uint32_t    tot_blk;
     uint32_t    tot_lun;
+    uint32_t    sec_size;
     uint32_t    pl_pg_size;
     uint32_t    blk_size;
     uint64_t    lun_size;

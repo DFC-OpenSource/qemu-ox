@@ -87,6 +87,7 @@ static void nvm_calc_print_geo (struct nvm_mmgr_geometry *g)
     g->tot_pg = g->pg_per_ch * g->n_of_ch;
     g->tot_blk = g->blk_per_ch * g->n_of_ch;
     g->tot_lun = g->lun_per_ch * g->n_of_ch;
+    g->sec_size = g->pg_size / g->sec_per_pg;
     g->pl_pg_size = g->pg_size * g->n_of_planes;
     g->blk_size = g->pl_pg_size * g->pg_per_blk;
     g->lun_size = g->blk_size * g->blk_per_lun;
@@ -116,6 +117,8 @@ static void nvm_calc_print_geo (struct nvm_mmgr_geometry *g)
     log_info ("   [tot_blk       = %d]", g->tot_blk);
     log_info ("   [lun_per_ch    = %d]", g->lun_per_ch);
     log_info ("   [tot_lun       = %d]", g->tot_lun);
+    log_info ("   [sector_size   = %d bytes, %d KB]",
+                                              g->sec_size, g->sec_size / 1024);
     log_info ("   [page_size     = %d bytes, %d KB]",
                                                 g->pg_size, g->pg_size / 1024);
     log_info ("   [pl_page_size  = %d bytes, %d KB]",
@@ -426,8 +429,10 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
     do {
         ret = ox_mq_submit_req(ftl->mq, qid, cmd);
 
-        if (ret)
+        if (ret) {
             retry--;
+            usleep (1000);
+        }
         else if (core.debug) {
             printf(" CMD cid: %lu, type: 0x%x submitted to FTL. "
                                "FTL queue: %d\n", cmd->cid, cmd->cmdtype, qid);
@@ -557,10 +562,20 @@ static int nvm_sync_io_prepare (struct nvm_channel *ch,
         flags |= NVM_SYNCIO_FLAG_BUF;
     }
 
-    for (i = 0; i < cmd->n_sectors; i++) {
-        cmd->prp[i] = (uint64_t) buf + cmd->sec_sz * i;
+    if (cmd->cmdtype == MMGR_READ_SGL || cmd->cmdtype == MMGR_WRITE_SGL) {
+
+        for (i = 0; i < cmd->n_sectors; i++)
+            cmd->prp[i] = (uint64_t) ((void **) buf)[i];
+        cmd->md_prp = (uint64_t) ((void **) buf)[cmd->n_sectors];
+        cmd->cmdtype = (cmd->cmdtype == MMGR_READ_SGL) ?
+                                                  MMGR_READ_PG : MMGR_WRITE_PG;
+    } else {
+
+        for (i = 0; i < cmd->n_sectors; i++)
+            cmd->prp[i] = (uint64_t) buf + cmd->sec_sz * i;
+        cmd->md_prp = (uint64_t) buf + cmd->sec_sz * cmd->n_sectors;
+
     }
-    cmd->md_prp = (uint64_t) buf + cmd->sec_sz * cmd->n_sectors;
 
 OUT:
     return 0;
