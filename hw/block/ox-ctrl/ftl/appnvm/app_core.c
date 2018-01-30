@@ -36,17 +36,39 @@ struct app_global __appnvm;
 static uint8_t gl_fn; /* Positive if global function has been called */
 uint16_t app_nch;
 
+pthread_mutex_t gc_ns_mutex;
+pthread_mutex_t gc_map_mutex;
+
 static int app_submit_io (struct nvm_io_cmd *);
 
 struct app_global *appnvm (void) {
     return &__appnvm;
 }
 
+void app_pg_io_prepare (struct app_channel *lch, struct app_io_data *data)
+{
+    uint16_t sec, pl;
+    struct nvm_mmgr_geometry *g = lch->ch->geometry;
+
+    for (pl = 0; pl < data->n_pl; pl++) {
+        data->pl_vec[pl] = data->buf +
+                      ((uint32_t) pl * (data->buf_sz / (uint32_t) data->n_pl));
+
+        for (sec = 0; sec < g->sec_per_pg; sec++) {
+            data->oob_vec[g->sec_per_pg * pl + sec] =
+                        data->pl_vec[pl] + data->pg_sz + (g->sec_oob_sz * sec);
+            data->sec_vec[pl][sec] = data->pl_vec[pl] + (g->sec_size * sec);
+        }
+
+        data->sec_vec[pl][g->sec_per_pg] = data->oob_vec[g->sec_per_pg * pl];
+    }
+}
+
 struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
 {
     struct app_io_data *data;
     struct nvm_mmgr_geometry *g;
-    uint16_t pl, sec;
+    uint16_t pl;
 
     data = malloc (sizeof (struct app_io_data));
     if (!data)
@@ -64,27 +86,38 @@ struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
     if (!data->buf)
         goto FREE;
 
-    data->buf_vec = malloc (sizeof (uint8_t *) * data->n_pl);
-    if (!data->buf_vec)
+    data->pl_vec = malloc (sizeof (uint8_t *) * data->n_pl);
+    if (!data->pl_vec)
         goto FREE_BUF;
-
-    for (pl = 0; pl < data->n_pl; pl++)
-        data->buf_vec[pl] = data->buf +
-                      ((uint32_t) pl * (data->buf_sz / (uint32_t) data->n_pl));
 
     data->oob_vec = malloc (sizeof (uint8_t *) * g->sec_per_pl_pg);
     if (!data->oob_vec)
         goto FREE_VEC;
 
-    for (pl = 0; pl < data->n_pl; pl++)
-        for (sec = 0; sec < g->sec_per_pg; sec++)
-            data->oob_vec[g->sec_per_pg * pl + sec] =
-                        data->buf_vec[pl] + data->pg_sz + (g->sec_oob_sz * sec);
+    data->sec_vec = malloc (sizeof (void *) * g->sec_per_pl_pg);
+    if (!data->sec_vec)
+        goto FREE_OOB;
+
+    for (pl = 0; pl < data->n_pl; pl++) {
+        data->sec_vec[pl] = malloc (sizeof (uint8_t *) * (g->sec_per_pg + 1));
+        if (!data->sec_vec[pl])
+            goto FREE_SEC;
+    }
+
+    app_pg_io_prepare (lch, data);
 
     return data;
 
+FREE_SEC:
+    while (pl) {
+        pl--;
+        free (data->sec_vec[pl]);
+    }
+    free (data->sec_vec);
+FREE_OOB:
+    free (data->oob_vec);
 FREE_VEC:
-    free (data->buf_vec);
+    free (data->pl_vec);
 FREE_BUF:
     free (data->buf);
 FREE:
@@ -94,8 +127,14 @@ FREE:
 
 void app_free_pg_io (struct app_io_data *data)
 {
+    uint32_t pl;
+
+    for (pl = 0; pl < data->n_pl; pl++)
+        free (data->sec_vec[pl]);
+
+    free (data->sec_vec);
     free (data->oob_vec);
-    free (data->buf_vec);
+    free (data->pl_vec);
     free (data->buf);
     free (data);
 }
@@ -118,7 +157,7 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
     do {
         memset (io->buf, 0, io->buf_sz);
         ret = app_io_rsv_blk (lch, MMGR_READ_PG,
-                                            (void **) io->buf_vec, blk_id, pg);
+                                            (void **) io->pl_vec, blk_id, pg);
 
         /* get info from OOB area in plane 0 */
         memcpy(&oob, io->buf + io->pg_sz, sizeof(struct app_magic));
@@ -136,13 +175,13 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
 }
 
 inline static int app_pg_io_switch (struct app_channel *lch, uint8_t cmdtype,
-                    void **buf_vec, struct nvm_ppa_addr *ppa, uint8_t type)
+                    void **pl_vec, struct nvm_ppa_addr *ppa, uint8_t type)
 {
     switch (type) {
         case APP_IO_NORMAL:
-            return app_pg_io (lch, cmdtype, buf_vec, ppa);
+            return app_pg_io (lch, cmdtype, pl_vec, ppa);
         case APP_IO_RESERVED:
-            return app_io_rsv_blk(lch, cmdtype, buf_vec, ppa->g.blk, ppa->g.pg);
+            return app_io_rsv_blk(lch, cmdtype, pl_vec, ppa->g.blk, ppa->g.pg);
         default:
             return -1;
     }
@@ -183,7 +222,7 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
     for (i = 0; i < pgs; i++) {
         ppa_io.g.pg = start_pg + i;
         if (direction == APP_TRANS_FROM_NVM)
-            if (app_pg_io_switch (io->lch, MMGR_READ_PG, (void **) io->buf_vec,
+            if (app_pg_io_switch (io->lch, MMGR_READ_PG, (void **) io->pl_vec,
                                                             &ppa_io, reserved))
                 return -1;
 
@@ -195,10 +234,10 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
 
             from = (direction == APP_TRANS_TO_NVM) ?
                 user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl)) :
-                io->buf_vec[pl];
+                io->pl_vec[pl];
 
             to = (direction == APP_TRANS_TO_NVM) ?
-                io->buf_vec[pl] :
+                io->pl_vec[pl] :
                 user_buf + (pg_ent_sz * i) + (pl * (pg_ent_sz / io->n_pl));
 
             memcpy(to, from, trf_sz);
@@ -211,7 +250,7 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
         }
 
         if (direction == APP_TRANS_TO_NVM)
-            if (app_pg_io_switch (io->lch, MMGR_WRITE_PG, (void **) io->buf_vec,
+            if (app_pg_io_switch (io->lch, MMGR_WRITE_PG, (void **) io->pl_vec,
                                                             &ppa_io, reserved))
                 return -1;
     }
@@ -220,7 +259,7 @@ int app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
 }
 
 int app_pg_io (struct app_channel *lch, uint8_t cmdtype,
-                                      void **buf_vec, struct nvm_ppa_addr *ppa)
+                                      void **pl_vec, struct nvm_ppa_addr *ppa)
 {
     int pl, ret = -1;
     void *buf = NULL;
@@ -238,7 +277,7 @@ int app_pg_io (struct app_channel *lch, uint8_t cmdtype,
         cmd->ppa.g.pg = ppa->g.pg;
 
         if (cmdtype != MMGR_ERASE_BLK)
-            buf = buf_vec[pl];
+            buf = pl_vec[pl];
 
         ret = nvm_submit_sync_io (ch, cmd, buf, cmdtype);
         if (ret)
@@ -250,7 +289,7 @@ int app_pg_io (struct app_channel *lch, uint8_t cmdtype,
 }
 
 int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
-                                     void **buf_vec, uint16_t blk, uint16_t pg)
+                                     void **pl_vec, uint16_t blk, uint16_t pg)
 {
     int pl, ret = -1;
     void *buf = NULL;
@@ -271,7 +310,7 @@ int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
         cmd->ppa.g.pg = pg;
 
         if (cmdtype != MMGR_ERASE_BLK)
-            buf = buf_vec[pl];
+            buf = pl_vec[pl];
 
         ret = nvm_submit_sync_io (ch, cmd, buf, cmdtype);
         if (ret)
@@ -404,16 +443,26 @@ static int app_global_init (void)
         log_err ("[appnvm: LBA I/O NOT started.\n");
         goto EXIT_GL_MAP;
     }
-/*
+
+    if (pthread_mutex_init (&gc_ns_mutex, NULL))
+        goto EXIT_LBA_IO;
+
+    if (pthread_mutex_init (&gc_map_mutex, NULL))
+        goto NS_MUTEX;
+
     if (appnvm()->gc.init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
-        goto EXIT_LBA_IO;
+        goto MAP_MUTEX;
     }
-*/
+
     return 0;
 
-/*EXIT_LBA_IO:
-    appnvm()->lba_io.exit_fn ();*/
+MAP_MUTEX:
+    pthread_mutex_destroy (&gc_map_mutex);
+NS_MUTEX:
+    pthread_mutex_destroy (&gc_ns_mutex);
+EXIT_LBA_IO:
+    appnvm()->lba_io.exit_fn ();
 EXIT_GL_MAP:
     appnvm()->gl_map.exit_fn ();
 EXIT_GL_PROV:
@@ -423,7 +472,9 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
-    //appnvm()->gc.exit_fn ();
+    appnvm()->gc.exit_fn ();
+    pthread_mutex_destroy (&gc_map_mutex);
+    pthread_mutex_destroy (&gc_ns_mutex);
     appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
