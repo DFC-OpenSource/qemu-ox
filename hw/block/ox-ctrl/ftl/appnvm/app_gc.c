@@ -485,7 +485,7 @@ static int gc_recycle_blks (struct app_blk_md_entry **list, uint32_t count,
 
         if (appnvm()->ch_prov.put_blk_fn (lch, list[blk_i]->ppa.g.lun,
                                                      list[blk_i]->ppa.g.blk)) {
-            log_err ("[appnvm (gc): Put block failed. %d]", ret);
+            log_err ("[appnvm (gc): Put block failed.]");
             gc_invalidate_err_pgs (lch, ppa_list);
             /* TODO: Return upserted sectors to previous state */
             continue;

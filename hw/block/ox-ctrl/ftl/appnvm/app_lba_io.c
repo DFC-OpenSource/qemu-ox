@@ -179,9 +179,15 @@ COMPLETE_CMD:
 
 static int lba_io_submit (struct nvm_io_cmd *cmd)
 {
-    uint32_t sec_i, qtype, ret;
+    uint32_t sec_i = 0, ch_i, qtype, ret = 0;
     struct lba_io_sec *lba[256];
     qtype = (cmd->cmdtype == MMGR_WRITE_PG) ? LBA_IO_WRITE_Q : LBA_IO_READ_Q;
+
+    for (ch_i = 0; ch_i < app_nch; ch_i++)
+        if (appnvm_ch_active (ch[ch_i]))
+            ret++;
+    if (!ret)
+        goto REQUEUE;
 
     for (sec_i = 0; sec_i < cmd->n_sec; sec_i++) {
         if (STAILQ_EMPTY(&flbahead))

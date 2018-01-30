@@ -450,15 +450,15 @@ static int app_global_init (void)
     if (pthread_mutex_init (&gc_map_mutex, NULL))
         goto NS_MUTEX;
 
-    if (appnvm()->gc.init_fn ()) {
+    /*if (appnvm()->gc.init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
         goto MAP_MUTEX;
-    }
+    }*/
 
     return 0;
 
-MAP_MUTEX:
-    pthread_mutex_destroy (&gc_map_mutex);
+/*MAP_MUTEX:
+    pthread_mutex_destroy (&gc_map_mutex);*/
 NS_MUTEX:
     pthread_mutex_destroy (&gc_ns_mutex);
 EXIT_LBA_IO:
@@ -472,7 +472,7 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
-    appnvm()->gc.exit_fn ();
+    //appnvm()->gc.exit_fn ();
     pthread_mutex_destroy (&gc_map_mutex);
     pthread_mutex_destroy (&gc_ns_mutex);
     appnvm()->lba_io.exit_fn ();
