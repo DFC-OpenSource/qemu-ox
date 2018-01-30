@@ -62,11 +62,13 @@ struct lba_io_sec_ent {
     struct app_prov_ppas *prov;
 };
 
-#define LBA_IO_ENTRIES  512
-#define LBA_IO_WRITE_Q  0
-#define LBA_IO_READ_Q   1
-#define LBA_IO_QUEUE_TO 2000000
-#define LBA_IO_PPA_SIZE 64
+#define LBA_IO_ENTRIES      512
+#define LBA_IO_WRITE_Q      0
+#define LBA_IO_READ_Q       1
+#define LBA_IO_QUEUE_TO     2000000
+#define LBA_IO_PPA_SIZE     64
+#define LBA_IO_RETRY        4
+#define LBA_IO_RETRY_DELAY  250000
 
 /* PPA I/Os are issued with 64 PPAs. This time in microseconds waits for
  * next command, if time is finished, a smaller PPA I/O command is issued */
@@ -79,6 +81,8 @@ static pthread_spinlock_t sec_spin;
 STAILQ_HEAD(fcmd_q, lba_io_cmd) fcmdhead = STAILQ_HEAD_INITIALIZER(fcmdhead);
 TAILQ_HEAD(ucmd_q, lba_io_cmd) ucmdhead = TAILQ_HEAD_INITIALIZER(ucmdhead);
 static pthread_spinlock_t cmd_spin;
+
+extern pthread_mutex_t gc_ns_mutex;
 
 static struct ox_mq        *lba_io_mq;
 
@@ -517,7 +521,7 @@ static void lba_io_complete_failed_lbas (uint8_t type)
 
 static void lba_io_sec_sq (struct ox_mq_entry *req)
 {
-    int ret;
+    int ret, retry = 0;
     struct lba_io_sec *lba = (struct lba_io_sec *) req->opaque;
     lba->mentry = req;
 
@@ -535,9 +539,17 @@ static void lba_io_sec_sq (struct ox_mq_entry *req)
         ret = ox_mq_used_count (lba_io_mq, lba->type);
     }
 
+RETRY:
     if ((rw_off[lba->type] == LBA_IO_PPA_SIZE) || !ret) {
-        if (lba_io_rw (lba->type))
-            lba_io_complete_failed_lbas (lba->type);
+        if (lba_io_rw (lba->type)) {
+            usleep (LBA_IO_RETRY_DELAY);
+            if (retry == LBA_IO_RETRY) {
+                lba_io_complete_failed_lbas (lba->type);
+                goto RESET_LINE;
+            }
+            retry++;
+            goto RETRY;
+        }
 
         goto RESET_LINE;
     }
@@ -563,8 +575,12 @@ static void lba_io_upsert_map (struct nvm_io_cmd *cmd)
         if (old_ppa == AND64)
             goto ROLLBACK;
 
-        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa))
+        pthread_mutex_lock (&gc_ns_mutex);
+        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa)) {
+            pthread_mutex_unlock (&gc_ns_mutex);
             goto ROLLBACK;
+        }
+        pthread_mutex_unlock (&gc_ns_mutex);
 
         ent->ppa = old_ppa;
     }
