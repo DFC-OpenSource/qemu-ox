@@ -35,7 +35,7 @@
 
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
 
-static pthread_spinlock_t *md_ch_spin;
+pthread_spinlock_t *md_ch_spin;
 
 struct map_cache_entry {
     uint8_t                     dirty;
@@ -477,6 +477,7 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
 {
     uint8_t *pg_map;
     uint32_t ch_map, ent_off;
+    struct nvm_mmgr_geometry *g;
     struct app_map_entry *map_ent;
     struct map_cache_entry *cache_ent;
     struct nvm_ppa_addr old_ppa, addr;
@@ -508,14 +509,15 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
     old_ppa.ppa = map_ent->ppa;
     if (map_ent->ppa) {
 
+        g = ch[ch_map]->ch->geometry;
         blk_md = appnvm()->md.get_fn (ch[old_ppa.g.ch], old_ppa.g.lun);
-        pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg / 8];
+        pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg * g->n_of_planes];
 
-        if (!(*pg_map & (1 << (old_ppa.g.pg % 8)))) {
+        if (!(pg_map[old_ppa.g.pl] & (1 << (old_ppa.g.sec)))) {
             pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
 
-            *pg_map |= (1 << (old_ppa.g.pg % 8));
-            blk_md[old_ppa.g.blk].invalid_pgs++;
+            pg_map[old_ppa.g.pl] |= 1 << old_ppa.g.sec;
+            blk_md[old_ppa.g.blk].invalid_sec++;
 
             pthread_spin_unlock (&md_ch_spin[old_ppa.g.ch]);
         }

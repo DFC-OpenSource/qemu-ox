@@ -44,10 +44,10 @@
 #define APP_IO_RESERVED 1 /* Used for FTL reerved blocks */
 
 #define APPNVM_FLUSH_RETRY      3
-#define APPNVM_GC_THRESD        0.5
+#define APPNVM_GC_THRESD        0.6
 #define APPNVM_GC_TARGET_RATE   0.9
-#define APPNVM_GC_MAX_BLKS      30
-#define APPNVM_GC_MIN_FREE_BLKS 4
+#define APPNVM_GC_MAX_BLKS      25
+#define APPNVM_GC_MIN_FREE_BLKS 8
 
 #define APPNVM_DEBUG       0
 
@@ -99,7 +99,7 @@ struct app_bbtbl {
 struct app_pg_oob {
     uint64_t    lba;
     uint8_t     pg_type;
-    uint8_t     rsv[3];
+    uint8_t     rsv[7];
 } __attribute__((packed));
 
 struct app_io_data {
@@ -107,9 +107,10 @@ struct app_io_data {
     struct nvm_channel *ch;
     uint8_t             n_pl;
     uint32_t            pg_sz;
-    uint8_t             *buf;
-    uint8_t             **buf_vec;
-    uint8_t             **oob_vec;
+    uint8_t            *buf;
+    uint8_t           **pl_vec;  /* Array of plane data (first sector) */
+    uint8_t           **oob_vec; /* Array of OOB area (per sector) */
+    uint8_t          ***sec_vec; /* Array of sectors + OOB [plane][sector] */
     uint32_t            meta_sz;
     uint32_t            buf_sz;
 };
@@ -131,9 +132,8 @@ struct app_blk_md_entry {
     struct nvm_ppa_addr     ppa;
     uint32_t                erase_count;
     uint16_t                current_pg;
-    uint16_t                invalid_pgs;
-    /* maximum of 512 pages per blk and 16 sectors per pg */
-    uint8_t                pg_state[64];
+    uint16_t                invalid_sec;
+    uint8_t                 pg_state[1024]; /* max of 8192 sectors per block */
 } __attribute__((packed));   /* 1042 bytes per entry */
 
 struct app_blk_md {
@@ -204,6 +204,7 @@ typedef struct app_blk_md_entry *(app_md_get) (struct app_channel *, uint16_t);
 
 typedef int  (app_ch_prov_init) (struct app_channel *);
 typedef void (app_ch_prov_exit) (struct app_channel *);
+typedef void (app_ch_prov_check_gc) (struct app_channel *);
 typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
 typedef int  (app_ch_prov_get_ppas)(struct app_channel *, struct nvm_ppa_addr *,
                                                                      uint16_t);
@@ -258,6 +259,7 @@ struct app_global_md {
 struct app_ch_prov {
     app_ch_prov_init        *init_fn;
     app_ch_prov_exit        *exit_fn;
+    app_ch_prov_check_gc    *check_gc_fn;
     app_ch_prov_put_blk     *put_blk_fn;
     app_ch_prov_get_ppas    *get_ppas_fn;
 };
@@ -385,7 +387,8 @@ inline void appnvm_ch_dec_thread (struct app_channel *lch)
     pthread_spin_unlock (&lch->flags.busy_spin);
 }
 
-struct app_io_data *app_alloc_pg_io (struct app_channel *lch);
+struct  app_io_data *app_alloc_pg_io (struct app_channel *lch);
+void    app_pg_io_prepare (struct app_channel *lch, struct app_io_data *data);
 void    app_free_pg_io (struct app_io_data *data);
 int     app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
                                      void **buf_vec, uint16_t blk, uint16_t pg);
