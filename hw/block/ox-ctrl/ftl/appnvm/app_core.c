@@ -32,11 +32,13 @@
 #include "appnvm.h"
 #include "hw/block/ox-ctrl/include/uatomic.h"
 
+extern struct core_struct core;
 struct app_global __appnvm;
 static uint8_t gl_fn; /* Positive if global function has been called */
 uint16_t app_nch;
 
-pthread_mutex_t gc_ns_mutex;
+pthread_mutex_t     gc_ns_mutex;
+pthread_spinlock_t *md_ch_spin;
 
 static int app_submit_io (struct nvm_io_cmd *);
 
@@ -93,7 +95,7 @@ struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
     if (!data->oob_vec)
         goto FREE_VEC;
 
-    data->sec_vec = malloc (sizeof (void *) * g->sec_per_pl_pg);
+    data->sec_vec = malloc (sizeof (void *) * data->n_pl);
     if (!data->sec_vec)
         goto FREE_OOB;
 
@@ -102,6 +104,10 @@ struct app_io_data *app_alloc_pg_io (struct app_channel *lch)
         if (!data->sec_vec[pl])
             goto FREE_SEC;
     }
+
+    data->mod_oob = malloc (data->meta_sz * data->n_pl);
+    if (!data->mod_oob)
+        goto FREE_SEC;
 
     app_pg_io_prepare (lch, data);
 
@@ -132,6 +138,7 @@ void app_free_pg_io (struct app_io_data *data)
         free (data->sec_vec[pl]);
 
     free (data->sec_vec);
+    free (data->mod_oob);
     free (data->oob_vec);
     free (data->pl_vec);
     free (data->buf);
@@ -432,15 +439,18 @@ static int app_global_init (void)
     if (pthread_mutex_init (&gc_ns_mutex, NULL))
         goto EXIT_LBA_IO;
 
-    /*if (appnvm()->gc.init_fn ()) {
+    if (appnvm()->gc.init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
         goto NS_MUTEX;
-    }*/
+    }
+
+    /* Limit the global namespace size for overprov space */
+    core.nvm_ns_size -= core.nvm_ns_size * APPNVM_GC_OVERPROV;
 
     return 0;
 
-/*NS_MUTEX:
-    pthread_mutex_destroy (&gc_ns_mutex);*/
+NS_MUTEX:
+    pthread_mutex_destroy (&gc_ns_mutex);
 EXIT_LBA_IO:
     appnvm()->lba_io.exit_fn ();
 EXIT_GL_MAP:
@@ -452,11 +462,14 @@ EXIT_GL_PROV:
 
 static void app_global_exit (void)
 {
-    //appnvm()->gc.exit_fn ();
+    appnvm()->gc.exit_fn ();
     pthread_mutex_destroy (&gc_ns_mutex);
     appnvm()->lba_io.exit_fn ();
     appnvm()->gl_map.exit_fn ();
     appnvm()->gl_prov.exit_fn ();
+
+    if (md_ch_spin)
+        free ((void *)md_ch_spin);
 }
 
 static int app_init_fn (uint16_t fn_id, void *arg)
@@ -506,6 +519,7 @@ int ftl_appnvm_init (void)
 {
     gl_fn = 0;
     app_nch = 0;
+    md_ch_spin = NULL;
 
     /* AppNVM initialization */
     channels_register ();

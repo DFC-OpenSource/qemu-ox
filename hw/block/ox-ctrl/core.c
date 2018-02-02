@@ -578,8 +578,8 @@ static int nvm_sync_io_prepare (struct nvm_channel *ch,
     if (cmd->cmdtype == MMGR_READ_SGL || cmd->cmdtype == MMGR_WRITE_SGL) {
 
         for (i = 0; i < cmd->n_sectors; i++)
-            cmd->prp[i] = (uint64_t) ((void **) buf)[i];
-        cmd->md_prp = (uint64_t) ((void **) buf)[cmd->n_sectors];
+            cmd->prp[i] = (uint64_t) ((uint8_t **) buf)[i];
+        cmd->md_prp = (uint64_t) ((uint8_t **) buf)[cmd->n_sectors];
         cmd->cmdtype = (cmd->cmdtype == MMGR_READ_SGL) ?
                                                   MMGR_READ_PG : MMGR_WRITE_PG;
     } else {
@@ -634,7 +634,7 @@ int nvm_submit_sync_io (struct nvm_channel *ch, struct nvm_mmgr_io_cmd *cmd,
 
     gettimeofday(&cmd->tstart,NULL);
 
-    switch (cmdtype) {
+    switch (cmd->cmdtype) {
         case MMGR_READ_PG:
             ret = mmgr->ops->read_pg(cmd);
             break;

@@ -72,7 +72,7 @@ struct lba_io_sec_ent {
 
 /* PPA I/Os are issued with 64 PPAs. This time in microseconds waits for
  * next command, if time is finished, a smaller PPA I/O command is issued */
-#define LBA_IO_EMPTY_US 200
+#define LBA_IO_EMPTY_US 400
 
 STAILQ_HEAD(flba_q, lba_io_sec) flbahead = STAILQ_HEAD_INITIALIZER(flbahead);
 TAILQ_HEAD(ulba_q, lba_io_sec) ulbahead = TAILQ_HEAD_INITIALIZER(ulbahead);

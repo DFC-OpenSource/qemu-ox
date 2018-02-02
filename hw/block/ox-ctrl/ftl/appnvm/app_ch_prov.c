@@ -113,6 +113,8 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
 
     if (!bad_blk) {
 
+        vblk->blk_md->flags |= APP_BLK_MD_AVLB;
+
         if (vblk->blk_md->flags & APP_BLK_MD_USED) {
             CIRCLEQ_INSERT_HEAD(&(prov->luns[lun].used_blk_head), vblk, entry);
             prov->luns[lun].nused_blks++;
@@ -140,6 +142,10 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
                                                 rnd_vblk, vblk, entry);
         }
         prov->luns[lun].nfree_blks++;
+    } else {
+
+        if (vblk->blk_md->flags & APP_BLK_MD_AVLB)
+            vblk->blk_md->flags ^= APP_BLK_MD_AVLB;
     }
 
     return 0;
@@ -314,9 +320,9 @@ static void ch_prov_check_gc (struct app_channel *lch)
         free_blk += p_lun->nfree_blks;
     }
 
-    /* If the channel runs out of blocks, disable channel and
-                                              leave a block left for GC usage*/
-    if (free_blk / tot_blk < APPNVM_GC_OVERPROV)
+    /* If the channel runs out of blocks, disable channel and leave
+                                                    last blocks for GC usage*/
+    if (free_blk < APPNVM_GC_MIN_FREE_CH_BLKS)
         appnvm_ch_active_unset (lch);
 
     if (free_blk / tot_blk < APPNVM_GC_THRESD)

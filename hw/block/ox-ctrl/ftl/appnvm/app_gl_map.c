@@ -35,7 +35,7 @@
 
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
 
-pthread_spinlock_t *md_ch_spin;
+extern pthread_spinlock_t *md_ch_spin;
 
 struct map_cache_entry {
     uint8_t                     dirty;
@@ -74,7 +74,7 @@ extern uint16_t             app_nch;
 static struct app_channel **ch;
 
 /* The mapping strategy ensures the entry size matches with the NVM pg size */
-static uint64_t             ent_per_pg;
+static uint64_t             map_ent_per_pg;
 
 /**
  * - The mapping table is spread using the global provisioning functions.
@@ -119,8 +119,8 @@ static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
         ((struct app_pg_oob *) io->oob_vec[sec])->pg_type = APP_PG_MAP;
     }
 
-    ret = app_nvm_seq_transfer (io, addr, ent->buf, 1, ent_per_pg,
-                            ent_per_pg, sizeof(struct app_map_entry),
+    ret = app_nvm_seq_transfer (io, addr, ent->buf, 1, map_ent_per_pg,
+                            map_ent_per_pg, sizeof(struct app_map_entry),
                             APP_TRANS_TO_NVM, APP_IO_NORMAL);
     if (ret)
         /* TODO: If write fails, the block should be closed and subsequent
@@ -151,8 +151,8 @@ static int map_nvm_read (struct map_cache_entry *ent)
     if (io == NULL)
         return -1;
 
-    ret = app_nvm_seq_transfer (io, &addr, ent->buf, 1, ent_per_pg,
-                            ent_per_pg, sizeof(struct app_map_entry),
+    ret = app_nvm_seq_transfer (io, &addr, ent->buf, 1, map_ent_per_pg,
+                            map_ent_per_pg, sizeof(struct app_map_entry),
                             APP_TRANS_FROM_NVM, APP_IO_NORMAL);
     if (ret)
         log_err("[appnvm (gl_map): NVM read failed. PPA 0x%016lx]", addr.ppa);
@@ -165,7 +165,7 @@ static int map_nvm_read (struct map_cache_entry *ent)
 
 static int map_evict_pg_cache (struct map_cache *cache)
 {
-    uint64_t lba;
+    struct nvm_ppa_addr ppa;
     struct map_cache_entry *cache_ent;
 
     cache_ent = TAILQ_FIRST(&cache->mbu_head);
@@ -180,9 +180,7 @@ static int map_evict_pg_cache (struct map_cache *cache)
     pthread_spin_unlock (&cache->mb_spin);
 
     if (cache_ent->dirty) {
-        lba = (uint64_t) (ch[cache->id]->map_md->entries * cache->id) +
-                                                      cache_ent->md_entry->lba;
-        if (map_nvm_write (cache_ent, lba)) {
+        if (map_nvm_write (cache_ent, cache_ent->md_entry->lba)) {
 
             pthread_spin_lock (&cache->mb_spin);
             TAILQ_INSERT_HEAD(&cache->mbu_head, cache_ent, u_entry);
@@ -195,6 +193,11 @@ static int map_evict_pg_cache (struct map_cache *cache)
 
         /* Cache entry PPA is set after the write completes */
     }
+
+    /* Invalidate old page PPAs */
+    ppa.ppa = cache_ent->md_entry->ppa;
+    if (ppa.ppa)
+        appnvm()->md.invalidate_fn (ch[ppa.g.ch], &ppa, APP_INVALID_PAGE);
 
     cache_ent->md_entry->ppa = cache_ent->ppa.ppa;
     cache_ent->ppa.ppa = 0;
@@ -234,7 +237,7 @@ static int map_load_pg_cache (struct map_cache *cache,
 
     /* If metadata entry PPA is zero, mapping page does not exist yet */
     if (!md_entry->ppa) {
-        for (ent_id = 0; ent_id < ent_per_pg; ent_id++) {
+        for (ent_id = 0; ent_id < map_ent_per_pg; ent_id++) {
             map_ent = &((struct app_map_entry *) cache_ent->buf)[ent_id];
             map_ent->lba = first_lba + ent_id;
             map_ent->ppa = 0x0;
@@ -360,15 +363,6 @@ static int map_init (void)
     if (!map_ch_cache)
         goto FREE_CH;
 
-    md_ch_spin = malloc (sizeof (pthread_spinlock_t) * app_nch);
-    if (!md_ch_spin)
-        goto FREE_CACHE;
-
-    for (ch_i = 0; ch_i < app_nch; ch_i++) {
-        if (pthread_spin_init (&md_ch_spin[ch_i], 0))
-            goto FREE_SPIN;
-    }
-
     pg_sz = ch[0]->ch->geometry->pl_pg_size;
     for (ch_i = 0; ch_i < app_nch; ch_i++) {
         pg_sz = MIN(ch[ch_i]->ch->geometry->pl_pg_size, pg_sz);
@@ -379,7 +373,7 @@ static int map_init (void)
         map_ch_cache[ch_i].id = ch_i;
     }
 
-    ent_per_pg = pg_sz / sizeof (struct app_map_entry);
+    map_ent_per_pg = pg_sz / sizeof (struct app_map_entry);
 
     log_info("    [appnvm: Global Mapping started.]\n");
 
@@ -390,14 +384,6 @@ EXIT_BUF_CH:
         ch_i--;
         map_exit_ch_cache (&map_ch_cache[ch_i]);
     }
-    ch_i = app_nch;
-FREE_SPIN:
-    while (ch_i) {
-        ch_i--;
-        pthread_spin_destroy (&md_ch_spin[ch_i]);
-    }
-    free ((void *) md_ch_spin);
-FREE_CACHE:
     free (map_ch_cache);
 FREE_CH:
     free (ch);
@@ -411,10 +397,8 @@ static void map_exit (void)
     while (ch_i) {
         ch_i--;
         map_exit_ch_cache (&map_ch_cache[ch_i]);
-        pthread_spin_destroy (&md_ch_spin[ch_i]);
     }
 
-    free ((void *) md_ch_spin);
     free (map_ch_cache);
     free (ch);
 }
@@ -428,8 +412,8 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
     struct map_pg_addr *addr;
 
     /* Mapping metadata pages are spread among channels using round-robin */
-    ch_map = (lba / ent_per_pg) % app_nch;
-    pg_off = (lba / ent_per_pg) / app_nch;
+    ch_map = (lba / map_ent_per_pg) % app_nch;
+    pg_off = (lba / map_ent_per_pg) / app_nch;
 
     md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
     if (!md_ent) {
@@ -444,7 +428,7 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
     pthread_mutex_lock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
     if (!addr->g.flag) {
 
-        first_pg_lba = (lba / ent_per_pg) * ent_per_pg;
+        first_pg_lba = (lba / map_ent_per_pg) * map_ent_per_pg;
 
         if (map_load_pg_cache (&map_ch_cache[ch_map], md_ent, first_pg_lba,
                                                                      pg_off)) {
@@ -479,14 +463,24 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
     struct app_map_entry *md_ent;
     struct map_cache_entry *cache_ent;
     struct map_pg_addr *addr;
+    struct nvm_ppa_addr ppa;
     int ret = 0;
 
-    ch_map = index % app_nch;
-    pg_off = index / app_nch;
+    ch_map = index / ch[0]->map_md->entries;
+    pg_off = index % ch[0]->map_md->entries;
 
     md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
     if (!md_ent) {
         log_err ("[appnvm (gl_map): MD page out of bounds. Index %lu\n", index);
+        return -1;
+    }
+
+    if (md_ent->lba != index) {
+        ppa.ppa = md_ent->ppa;
+        log_err ("[appnvm(gl_map): UPD MD. LBA does not match entry. lba: %lu, "
+            "md lba: %lu, md ppa: (%d/%d/%d/%d/%d/%d), Ch %d, pg_off %d\n",
+            index, md_ent->lba, ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl,
+            ppa.g.pg, ppa.g.sec, ch_map, pg_off);
         return -1;
     }
 
@@ -496,10 +490,10 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
     pthread_mutex_lock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
     if (!addr->g.flag) {
 
-        if (md_ent->ppa != old_ppa)
+        if (addr->addr != old_ppa)
             ret = -1;
         else
-            md_ent->ppa = new_ppa;
+            addr->addr = new_ppa;
 
     } else {
 
@@ -525,9 +519,9 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
     struct nvm_ppa_addr old_ppa, addr;
     struct app_blk_md_entry *blk_md;
 
-    ch_map = (lba / ent_per_pg) % app_nch;
-    ent_off = lba % ent_per_pg;
-    if (ent_off >= ent_per_pg) {
+    ch_map = (lba / map_ent_per_pg) % app_nch;
+    ent_off = lba % map_ent_per_pg;
+    if (ent_off >= map_ent_per_pg) {
         log_err ("[appnvm(gl_map): Entry offset out of bounds. Ch %d\n",ch_map);
         return -1;
     }
@@ -581,8 +575,8 @@ static uint64_t map_read (uint64_t lba)
     struct nvm_ppa_addr ppa;
     uint32_t ent_off;
 
-    ent_off = lba % ent_per_pg;
-    if (ent_off >= ent_per_pg) {
+    ent_off = lba % map_ent_per_pg;
+    if (ent_off >= map_ent_per_pg) {
         log_err ("[appnvm(gl_map): Entry offset out of bounds. lba %lu\n", lba);
         return AND64;
     }

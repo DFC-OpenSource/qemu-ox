@@ -11,8 +11,8 @@
 
 #define VOLT_CHIP_COUNT      8
 #define VOLT_VIRTUAL_LUNS    4
-#define VOLT_BLOCK_COUNT     32
-#define VOLT_PAGE_COUNT      128
+#define VOLT_BLOCK_COUNT     64
+#define VOLT_PAGE_COUNT      64
 #define VOLT_SECTOR_COUNT    4
 #define VOLT_PLANE_COUNT     2
 #define VOLT_PAGE_SIZE       0x4000

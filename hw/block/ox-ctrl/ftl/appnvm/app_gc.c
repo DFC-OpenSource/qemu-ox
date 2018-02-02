@@ -34,7 +34,7 @@
 #define APP_GC_DEBUG         1
 #define APP_GC_PARALLEL_CH   1
 #define APP_GC_DELAY_US      10000
-#define APP_GC_DELAY_CH_BUSY 5000
+#define APP_GC_DELAY_CH_BUSY 1000
 
 extern uint16_t              app_nch;
 static struct app_channel  **ch;
@@ -49,13 +49,17 @@ static uint64_t moved_sec;
 extern pthread_mutex_t gc_ns_mutex;
 extern pthread_spinlock_t *md_ch_spin;
 
+pthread_mutex_t *gc_cond_mutex;
+pthread_cond_t  *gc_cond;
+
 struct gc_th_arg {
     uint16_t            tid;
+    uint16_t            bufid;
     struct app_channel *lch;
 };
 
 static int gc_bucket_sort (struct app_blk_md_entry **list,
-                                        uint32_t list_sz, uint32_t n_buckets)
+                    uint32_t list_sz, uint32_t n_buckets, uint32_t min_invalid)
 {
     uint32_t stop, bi, j, k, ip, bucketc[++n_buckets];
     struct app_blk_md_entry **bucket[n_buckets];
@@ -80,8 +84,8 @@ static int gc_bucket_sort (struct app_blk_md_entry **list,
     stop = 0;
     for (bi = n_buckets - 1; bi > 0; bi--) {
         for (j = 0; j < bucketc[bi]; j++) {
-            if ((float) bi / (float) n_buckets <
-                            APPNVM_GC_TARGET_RATE && k >= APPNVM_GC_MAX_BLKS) {
+            if (((float) bi / (float) n_buckets < APPNVM_GC_TARGET_RATE &&
+                            (k >= APPNVM_GC_MAX_BLKS)) || (bi < min_invalid)) {
                 stop++;
                 break;
             }
@@ -102,10 +106,11 @@ FREE:
 static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
                                                                    uint32_t *c)
 {
-    uint32_t lun_i, blk_i, count = 0;
     int nblks;
     struct app_blk_md_entry *lun;
     struct app_blk_md_entry **list = NULL;
+    uint32_t lun_i, blk_i, min_inv;
+    float count = 0, avlb = 0, inv_rate;
 
     for (lun_i = 0; lun_i < lch->ch->geometry->lun_per_ch; lun_i++) {
 
@@ -117,6 +122,9 @@ static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
 
         for (blk_i = 0; blk_i < lch->ch->geometry->blk_per_lun; blk_i++) {
 
+            if (!(lun[blk_i].flags & APP_BLK_MD_AVLB))
+                continue;
+
             if (    (lun[blk_i].flags & APP_BLK_MD_USED) &&
                    !(lun[blk_i].flags & APP_BLK_MD_OPEN) &&
                      lun[blk_i].current_pg == lch->ch->geometry->pg_per_blk) {
@@ -125,12 +133,20 @@ static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
                 list = realloc(list, sizeof(struct app_blk_md_entry *) * count);
                 if (!list)
                     goto FREE;
-                list[count - 1] = &lun[blk_i];
+                list[(int)count - 1] = &lun[blk_i];
             }
+            avlb++;
         }
     }
 
-    nblks = gc_bucket_sort (list, count, lch->ch->geometry->sec_per_blk);
+    /* Compute minimum of invalid pages for targeting a block */
+    min_inv = lch->ch->geometry->pg_per_blk * APPNVM_GC_TARGET_RATE;
+    inv_rate = 1.0 - ((count / avlb - APPNVM_GC_THRESD) /
+                                                     (1.0 - APPNVM_GC_THRESD));
+    if ((count / avlb) >= APPNVM_GC_THRESD)
+        min_inv *= inv_rate;
+
+    nblks = gc_bucket_sort(list, count, lch->ch->geometry->sec_per_blk,min_inv);
     if (nblks < 0)
         goto FREE;
 
@@ -147,31 +163,12 @@ FREE:
 static void gc_invalidate_err_pgs (struct app_channel *lch,
                                                     struct nvm_ppa_addr **list)
 {
-    uint8_t *pg_map;
-    uint8_t off;
-    uint32_t pg_i, pl_i;
-    struct app_blk_md_entry *lun;
+    uint32_t pg_i;
     struct nvm_mmgr_geometry *g = lch->ch->geometry;
 
-    off = (1 << g->sec_per_pg) - 1;
-
-    for (pg_i = 0; pg_i < g->pg_per_blk; pg_i++) {
-
-        if (list[pg_i][0].ppa) {
-            lun = appnvm()->md.get_fn (lch, list[pg_i][0].g.lun);
-            pg_map = &lun[list[pg_i][0].g.blk].pg_state[pg_i * g->n_of_planes];
-
-            pthread_spin_lock (&md_ch_spin[lch->app_ch_id]);
-
-            /* Set the sectors as invalid in all planes */
-            for (pl_i = 0; pl_i < g->n_of_planes; pl_i++)
-                pg_map[pl_i] = off;
-
-            lun[list[pg_i][0].g.blk].invalid_sec += g->sec_per_pl_pg;
-
-            pthread_spin_unlock (&md_ch_spin[lch->app_ch_id]);
-        }
-    }
+    for (pg_i = 0; pg_i < g->pg_per_blk; pg_i++)
+        if (list[pg_i][0].ppa)
+            appnvm()->md.invalidate_fn (lch, &list[pg_i][0], APP_INVALID_PAGE);
 }
 
 static int gc_check_valid_pg (struct app_channel *lch,
@@ -215,77 +212,134 @@ static int gc_read_blk (struct app_channel *lch,
     return 0;
 }
 
-static int gc_move_buf_sectors (struct app_channel *lch,
+static uint32_t gc_move_single_sector (struct app_channel *lch,
         struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
-        uint16_t tid)
+        uint16_t tid, uint32_t pg_i, uint32_t sec_i, uint32_t w_ppa_off)
 {
-    uint32_t pg_i, sec_i, pl, sec;
-    uint32_t w_pl, w_pg, w_sec, w_sec_i, ppa_off = 0;
-    uint8_t *pg_map, *data, *w_data, *oob, *w_oob;
+    uint32_t pl, sec;
+    uint32_t w_pl, w_pg, w_sec, w_sec_i;
+    uint8_t *pg_map, *data, *oob, *w_oob;
 
     struct nvm_ppa_addr *old_ppa;
     struct app_io_data *io, *w_io;
     struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
 
+    pg_map = &blk_md->pg_state[pg_i * geo->n_of_planes];
+
+    /* Check if sector is valid */
+    pl  = sec_i / geo->sec_per_pg;
+    sec = sec_i % geo->sec_per_pg;
+    if (!(pg_map[pl] & (1 << sec))) {
+
+        w_pg    = w_ppa_off / geo->sec_per_pl_pg;
+        w_sec_i = w_ppa_off % geo->sec_per_pl_pg;
+        w_sec   = w_sec_i % geo->sec_per_pg;
+        w_pl    = w_sec_i / geo->sec_per_pg;
+
+        /* Set old ppa list */
+        old_ppa = &ppa_list[w_pg][geo->sec_per_pl_pg + w_sec_i];
+        old_ppa->ppa   = blk_md->ppa.ppa;
+        old_ppa->g.pg  = pg_i;
+        old_ppa->g.pl  = pl;
+        old_ppa->g.sec = sec;
+
+        /* Move sector data and oob to write position */
+        io   = (struct app_io_data *) gc_buf[tid][pg_i];
+        data = io->pl_vec[pl] + (sec * geo->sec_size);
+        oob  = io->oob_vec[sec_i];
+
+        w_io   = (struct app_io_data *) gc_buf[tid][w_pg];
+        w_oob  = w_io->mod_oob + (geo->sec_oob_sz * geo->sec_per_pg * w_pl);
+
+        if (data != w_io->sec_vec[w_pl][w_sec]) {
+            w_io->sec_vec[w_pl][w_sec]           = data;
+            w_io->sec_vec[w_pl][geo->sec_per_pg] = w_oob;
+            w_io->oob_vec[w_sec_i]               = oob;
+            memcpy (w_oob + (geo->sec_oob_sz * w_sec), oob, geo->sec_oob_sz);
+        }
+
+        return ++w_ppa_off;
+    }
+
+    return w_ppa_off;
+}
+
+static uint32_t gc_move_mapping_pgs (struct app_channel *lch,
+        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
+        uint16_t tid, uint32_t w_ppa_off, uint16_t *map_pgs, uint32_t npgs)
+{
+    uint32_t pl_i, w_pg, pg_i, sec_i, last_off = 0;
+    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
+    struct app_io_data *io, *w_io;
+
+    w_pg = w_ppa_off / geo->sec_per_pl_pg;
+
+    if (w_ppa_off % geo->sec_per_pl_pg != 0) {
+
+        io   = (struct app_io_data *) gc_buf[tid][w_pg];
+        w_io = (struct app_io_data *) gc_buf[tid][w_pg + npgs];
+
+        for (pl_i = 0; pl_i < geo->n_of_planes; pl_i++) {
+            memcpy (w_io->sec_vec[pl_i], io->sec_vec[pl_i],
+                                    sizeof (uint8_t *) * geo->sec_per_pg + 1);
+            memcpy (w_io->oob_vec, io->oob_vec,
+                                    sizeof (uint8_t *) * geo->sec_per_pl_pg);
+        }
+
+        memcpy (w_io->mod_oob, io->mod_oob, geo->pg_oob_sz);
+        memcpy (ppa_list[w_pg + npgs], ppa_list[w_pg],
+                           sizeof (struct nvm_ppa_addr) * geo->sec_per_pl_pg);
+
+        last_off = w_ppa_off % geo->sec_per_pl_pg;
+        w_ppa_off -= last_off;
+    }
+
+    for (pg_i = 0; pg_i < npgs; pg_i++) {
+        for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++)
+            w_ppa_off = gc_move_single_sector (lch, blk_md, ppa_list, tid,
+                                              map_pgs[pg_i], sec_i, w_ppa_off);
+    }
+
+    return w_ppa_off + last_off;
+}
+
+static int gc_move_buf_sectors (struct app_channel *lch,
+        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
+        uint16_t tid)
+{
+    uint32_t pg_i, sec_i;
+    uint32_t ppa_off = 0, map_i = 0;
+
+    struct app_io_data *io;
+    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
+    struct app_pg_oob *pg_oob;
+    uint16_t map_pgs[geo->pg_per_blk];
+
+    memset (map_pgs, 0, sizeof (uint16_t) * geo->pg_per_blk);
+
     for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++) {
         if (gc_check_valid_pg (lch, blk_md, pg_i)) {
 
-            for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++) {
-                pg_map = &blk_md->pg_state[pg_i * geo->n_of_planes];
-
-                /* Check if sector is valid */
-                pl  = sec_i / geo->sec_per_pg;
-                sec = sec_i % geo->sec_per_pg;
-                if (!(pg_map[pl] & (1 << sec))) {
-
-                    w_pg    = ppa_off / geo->sec_per_pl_pg;
-                    w_sec_i = ppa_off % geo->sec_per_pl_pg;
-                    w_sec   = w_sec_i % geo->sec_per_pg;
-                    w_pl    = w_sec_i / geo->sec_per_pg;
-
-                    /* Set old ppa list */
-                    old_ppa = &ppa_list[w_pg][geo->sec_per_pl_pg + w_sec_i];
-                    old_ppa->ppa   = blk_md->ppa.ppa;
-                    old_ppa->g.pg  = pg_i;
-                    old_ppa->g.pl  = pl;
-                    old_ppa->g.sec = sec;
-
-                    /* Move sector data and oob to write position */
-                    io   = (struct app_io_data *) gc_buf[tid][pg_i];
-                    data = io->pl_vec[pl] + (sec * geo->sec_size);
-                    oob  = io->oob_vec[sec_i];
-
-                    w_io   = (struct app_io_data *) gc_buf[tid][w_pg];
-                    w_data = w_io->pl_vec[w_pl] + (w_sec * geo->sec_size);
-                    w_oob  = w_io->oob_vec[w_sec_i];
-
-                    if (data != w_data) {
-                        memcpy (w_data, data, geo->sec_size);
-                        memcpy (w_oob, oob, geo->sec_oob_sz);
-                    }
-
-                    ppa_off++;
-                }
+            /* Buffer mapping table pages to keep page alignment */
+            io = (struct app_io_data *) gc_buf[tid][pg_i];
+            pg_oob = (struct app_pg_oob *) io->oob_vec[0];
+            if (pg_oob->pg_type == APP_PG_MAP) {
+                map_pgs[map_i] = pg_i;
+                map_i++;
+                continue;
             }
+
+            for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++)
+                ppa_off = gc_move_single_sector
+                            (lch, blk_md, ppa_list, tid, pg_i, sec_i, ppa_off);
         }
     }
 
+    if (map_i)
+        ppa_off = gc_move_mapping_pgs
+                         (lch, blk_md, ppa_list, tid, ppa_off, map_pgs, map_i);
+
     return ppa_off;
-}
-
-static void gc_invalidate_sector (struct nvm_ppa_addr *ppa)
-{
-    struct app_blk_md_entry *lun;
-    uint8_t *pg_map;
-
-    lun = appnvm()->md.get_fn (ch[ppa->g.ch], ppa->g.lun);
-    pg_map = &lun[ppa->g.blk].pg_state
-                        [ppa->g.pg * ch[ppa->g.ch]->ch->geometry->n_of_planes];
-
-    pthread_spin_lock (&md_ch_spin[ppa->g.ch]);
-    pg_map[ppa->g.pl] |= 1 << ppa->g.sec;
-    lun[ppa->g.blk].invalid_sec++;
-    pthread_spin_unlock (&md_ch_spin[ppa->g.ch]);
 }
 
 static int gc_write_blk (struct app_channel *lch, struct app_blk_md_entry *md,
@@ -318,16 +372,17 @@ static int gc_write_blk (struct app_channel *lch, struct app_blk_md_entry *md,
         if (pg_i == npgs - 1) {
             for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++) {
                 if (!ppa_list[pg_i][geo->sec_per_pl_pg + sec_i].ppa) {
+                    appnvm()->md.invalidate_fn
+                             (lch, &ppa_list[pg_i][sec_i], APP_INVALID_SECTOR);
                     ppa_list[pg_i][sec_i].ppa = 0x0;
-                    gc_invalidate_sector (&ppa_list[pg_i][sec_i]);
                 }
             }
         }
 
         io = (struct app_io_data *) gc_buf[tid][pg_i];
 
-        if (app_pg_io (lch, MMGR_WRITE_PG,
-                                       (void **) io->pl_vec, ppa_list[pg_i])) {
+        if (app_pg_io (lch, MMGR_WRITE_SGL,
+                                       (void **) io->sec_vec, ppa_list[pg_i])) {
 
             /* TODO: If write fails, tell provisioning to recycle
              * current block and abort any write to the blocks,
@@ -356,11 +411,10 @@ static int gc_upsert_sector (struct app_channel *lch,
         switch (oob->pg_type) {
             case APP_PG_MAP:
 
-                log_info (" GC MAP PAGE UPDATE index %lu\n", oob->lba);
-
-                if (appnvm()->gl_map.upsert_md_fn (oob->lba, new_ppa->ppa,
+                if (new_ppa->g.sec == 0 && new_ppa->g.pl == 0)
+                    if (appnvm()->gl_map.upsert_md_fn (oob->lba, new_ppa->ppa,
                                                                  old_ppa->ppa))
-                    goto INVALID;
+                        goto INVALID;
 
                 return 0;
 
@@ -385,7 +439,6 @@ static int gc_upsert_sector (struct app_channel *lch,
                 return 0;
 
             case APP_PG_PADDING:
-                log_info (" GC PADDING PAGE UPDATE\n");
                 goto INVALID;
 
             default:
@@ -397,7 +450,7 @@ static int gc_upsert_sector (struct app_channel *lch,
     }
 
 INVALID:
-    gc_invalidate_sector (new_ppa);
+    appnvm()->md.invalidate_fn (lch, new_ppa, APP_INVALID_SECTOR);
     old_ppa->ppa = 0x0;
     return ret;
 }
@@ -480,6 +533,9 @@ static int gc_recycle_blks (struct app_blk_md_entry **list, uint32_t count,
     for (blk_i = 0; blk_i < count; blk_i++) {
         lch = ch[list[blk_i]->ppa.g.ch];
 
+        for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++)
+            app_pg_io_prepare (lch, gc_buf[tid][pg_i]);
+
         /* Read all valid pages in the blk from NVM to the buffer */
         if (gc_read_blk (lch, list[blk_i], tid)) {
             log_err ("[appnvm (gc): Read block failed.]");
@@ -533,73 +589,95 @@ static void *gc_run_ch (void *arg)
     struct app_channel       *lch = th_arg->lch;
     struct app_blk_md_entry **list;
 
-    appnvm_ch_active_unset (lch);
+    while (!stop) {
 
-    do {
-        if (!appnvm_ch_nthreads (lch)) {
-            loop = 0;
+        pthread_mutex_lock(&gc_cond_mutex[th_arg->tid]);
+        pthread_cond_signal(&gc_cond[th_arg->tid]);
+        pthread_cond_wait(&gc_cond[th_arg->tid], &gc_cond_mutex[th_arg->tid]);
+        pthread_mutex_unlock(&gc_cond_mutex[th_arg->tid]);
+        if (stop)
+            break;
 
-            list = gc_get_target_blks (lch, &victims);
-            if (!list || !victims) {
-                usleep (APP_GC_DELAY_US);
-                break;
-            }
+        appnvm_ch_active_unset (lch);
 
-            recycled = gc_recycle_blks (list, victims, th_arg->tid, &blk_sec);
-            if (recycled != victims)
-                log_info ("[appnvm (gc): %d recycled, %d with errors.]",
+        do {
+            if (!appnvm_ch_nthreads (lch)) {
+                loop = 0;
+
+                list = gc_get_target_blks (lch, &victims);
+                if (!list || !victims) {
+                    usleep (APP_GC_DELAY_US);
+                    break;
+                }
+
+                recycled = gc_recycle_blks (list, victims,
+                                                      th_arg->bufid, &blk_sec);
+                if (recycled != victims)
+                    log_info ("[appnvm (gc): %d recycled, %d with errors.]",
                                                  recycled, victims - recycled);
 
-            if (APP_GC_DEBUG)
-                printf (" GC (%d): (%d/%d) %.2f MB - Total: (%d/%lu) %.2f MB\n",
-                   lch->app_ch_id, recycled, blk_sec,
-                   (4.0 * (double) blk_sec) / (double) 1024,
-                   recycled_blks, moved_sec,
-                   (4.0 * (double) moved_sec) / (double) 1024);
-        } else {
-            usleep (APP_GC_DELAY_CH_BUSY);
-        }
-    } while (loop);
+                if (APP_GC_DEBUG)
+                    printf (" GC (%d): (%d/%d) %.2f MB - Total: (%d/%lu) "
+                            "%.2f MB\n", lch->app_ch_id, recycled, blk_sec,
+                        (4.0 * (double) blk_sec) / (double) 1024,
+                        recycled_blks, moved_sec,
+                        (4.0 * (double) moved_sec) / (double) 1024);
+            } else {
+                usleep (APP_GC_DELAY_CH_BUSY);
+            }
+        } while (loop);
 
-    appnvm_ch_need_gc_unset (lch);
-    appnvm()->ch_prov.check_gc_fn (lch);
-    appnvm_ch_active_set (lch);
-
-    free (th_arg);
+        appnvm_ch_need_gc_unset (lch);
+        if (victims)
+            appnvm()->ch_prov.check_gc_fn (lch);
+        appnvm_ch_active_set (lch);
+    };
 
     return NULL;
 }
 
 static void *gc_check_fn (void *arg)
 {
-    uint16_t cch = 0, sleep = 0, n_run = 0, ch_i;
+    uint8_t wait[app_nch];
+    uint16_t cch = 0, sleep = 0, n_run = 0, ch_i, th_i;
     pthread_t run_th[app_nch];
     struct gc_th_arg *th_arg;
 
-    memset (run_th, 0x0, sizeof (pthread_t) * app_nch);
+    memset (wait, 0x0, sizeof (uint8_t) * app_nch);
+
+    th_arg = malloc (sizeof (struct gc_th_arg) * app_nch);
+    if (!th_arg)
+        return NULL;
+
+    for (th_i = 0; th_i < app_nch; th_i++) {
+        th_arg[th_i].tid = th_i;
+        th_arg[th_i].lch = ch[th_i];
+
+        if (pthread_create (&run_th[th_i], NULL, gc_run_ch,
+                                                       (void *) &th_arg[th_i]))
+            goto STOP;
+    }
 
     while (!stop) {
-
         if (appnvm_ch_need_gc (ch[cch])) {
 
-            th_arg = malloc (sizeof (struct gc_th_arg));
-            if (!th_arg)
-                continue;
-
-            th_arg->tid = n_run;
-            th_arg->lch = ch[cch];
-
-            if (pthread_create (&run_th[cch], NULL, gc_run_ch, (void *) th_arg))
-                continue;
-
+            th_arg[cch].bufid = n_run;
             n_run++;
             sleep++;
+            wait[cch]++;
+
+            pthread_mutex_lock (&gc_cond_mutex[cch]);
+            pthread_cond_signal(&gc_cond[cch]);
+            pthread_mutex_unlock (&gc_cond_mutex[cch]);
 
             if (n_run == APP_GC_PARALLEL_CH || (cch == app_nch - 1)) {
                 for (ch_i = 0; ch_i < app_nch; ch_i++) {
-                    if (run_th[ch_i]) {
-                        pthread_join (run_th[ch_i], NULL);
-                        run_th[ch_i] = 0x0;
+                    if (wait[ch_i]) {
+                        pthread_mutex_lock (&gc_cond_mutex[cch]);
+                        pthread_cond_signal(&gc_cond[cch]);
+                        pthread_cond_wait(&gc_cond[cch], &gc_cond_mutex[cch]);
+                        pthread_mutex_unlock (&gc_cond_mutex[cch]);
+                        wait[cch] = 0x0;
                         n_run--;
                     }
                     if (!n_run)
@@ -617,6 +695,16 @@ static void *gc_check_fn (void *arg)
         }
     }
 
+STOP:
+    while (th_i) {
+        th_i--;
+        pthread_mutex_lock (&gc_cond_mutex[th_i]);
+        pthread_cond_signal(&gc_cond[th_i]);
+        pthread_mutex_unlock (&gc_cond_mutex[th_i]);
+        pthread_join (run_th[th_i], NULL);
+    }
+
+    free (th_arg);
     return NULL;
 }
 
@@ -693,15 +781,25 @@ static int gc_init (void)
     buf_oob_sz = geo->pg_oob_sz;
     buf_npg = geo->pg_per_blk;
 
+    gc_cond = malloc (sizeof (pthread_cond_t) * app_nch);
+    if (!gc_cond)
+        goto FREE_CH;
+
+    gc_cond_mutex = malloc (sizeof (pthread_mutex_t) * app_nch);
+    if (!gc_cond_mutex)
+        goto FREE_COND;
+
     for (ch_i = 0; ch_i < app_nch; ch_i++) {
-        geo = ch[ch_i]->ch->geometry;
-        buf_pg_sz = MAX(geo->pg_size, buf_pg_sz);
-        buf_oob_sz = MAX(geo->pg_oob_sz, buf_oob_sz);
-        buf_npg = MAX(geo->pg_per_blk, buf_npg);
+        if (pthread_cond_init (&gc_cond[ch_i], NULL))
+            goto COND_MUTEX;
+        if (pthread_mutex_init (&gc_cond_mutex[ch_i], NULL)) {
+            pthread_cond_destroy (&gc_cond[ch_i]);
+            goto COND_MUTEX;
+        }
     }
 
     if (gc_alloc_buf ())
-        goto FREE_CH;
+        goto COND_MUTEX;
 
     stop = 0;
     if (pthread_create (&check_th, NULL, gc_check_fn, NULL))
@@ -711,6 +809,15 @@ static int gc_init (void)
 
 FREE_BUF:
     gc_free_buf ();
+COND_MUTEX:
+    while (ch_i) {
+        ch_i--;
+        pthread_cond_destroy (&gc_cond[ch_i]);
+        pthread_mutex_destroy (&gc_cond_mutex[ch_i]);
+    }
+    free (gc_cond_mutex);
+FREE_COND:
+    free (gc_cond);
 FREE_CH:
     free (ch);
     return -1;
@@ -718,9 +825,19 @@ FREE_CH:
 
 static void gc_exit (void)
 {
+    uint16_t ch_i;
+
     stop++;
     pthread_join (check_th, NULL);
     gc_free_buf ();
+
+    for (ch_i = 0; ch_i < app_nch; ch_i++) {
+        pthread_cond_destroy (&gc_cond[ch_i]);
+        pthread_mutex_destroy (&gc_cond_mutex[ch_i]);
+    }
+
+    free (gc_cond_mutex);
+    free (gc_cond);
     free (ch);
 }
 

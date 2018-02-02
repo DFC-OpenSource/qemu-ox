@@ -32,6 +32,9 @@
 
 LIST_HEAD(app_ch, app_channel) app_ch_head = LIST_HEAD_INITIALIZER(app_ch_head);
 
+extern struct core_struct core;
+extern pthread_spinlock_t *md_ch_spin;
+
 static int app_reserve_blks (struct app_channel *lch)
 {
     int trsv, n, pl, n_pl;
@@ -267,10 +270,19 @@ static void app_exit_map (struct app_channel *lch)
 static int channels_init (struct nvm_channel *ch, uint16_t id)
 {
     struct app_channel *lch;
+    uint32_t blk_sz;
+
+    md_ch_spin = realloc
+                 ((void *) md_ch_spin, sizeof (pthread_spinlock_t) * (id + 1));
+    if (!md_ch_spin)
+        return -1;
+
+    if (pthread_spin_init (&md_ch_spin[id], 0))
+        return -1;
 
     lch = malloc (sizeof(struct app_channel));
     if (!lch)
-        return EMEM;
+        goto CH_SPIN;
 
     lch->ch = ch;
 
@@ -278,16 +290,17 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
     lch->app_ch_id = id;
 
     lch->flags.busy.counter = U_ATOMIC_INIT_RUNTIME(0);
-    pthread_spin_init (&lch->flags.busy_spin, 0);
-    pthread_spin_init (&lch->flags.active_spin, 0);
-    pthread_spin_init (&lch->flags.need_gc_spin, 0);
+
+    if (pthread_spin_init (&lch->flags.busy_spin, 0))    goto FREE_LCH;
+    if (pthread_spin_init (&lch->flags.active_spin, 0))  goto BUSY_SPIN;
+    if (pthread_spin_init (&lch->flags.need_gc_spin, 0)) goto ACT_SPIN;
 
     /* Enabled channel and no need for GC */
     appnvm_ch_active_set (lch);
     appnvm_ch_need_gc_unset (lch);
 
     if (app_reserve_blks (lch))
-        goto FREE_LCH;
+        goto GC_SPIN;
 
     if (app_init_bbt (lch))
         goto FREE_LCH;
@@ -301,6 +314,11 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
     if (app_init_map (lch))
         goto EXIT_CH_PROV;
 
+    /* Remove reserved blocks from namespace */
+    blk_sz = lch->ch->geometry->pg_per_blk * lch->ch->geometry->pg_size;
+    core.nvm_ns_size -= lch->ch->mmgr_rsv * blk_sz;
+    core.nvm_ns_size -= lch->ch->ftl_rsv * blk_sz;
+
     log_info("    [appnvm: channel %d started with %d bad blocks.]\n",ch->ch_id,
                                                           lch->bbtbl->bb_count);
     return 0;
@@ -311,11 +329,18 @@ FREE_BLK_MD:
     app_exit_blk_md (lch);
 FREE_BBT:
     app_exit_bbt (lch);
+GC_SPIN:
+    pthread_spin_destroy (&lch->flags.need_gc_spin);
+ACT_SPIN:
+    pthread_spin_destroy (&lch->flags.active_spin);
+BUSY_SPIN:
+    pthread_spin_destroy (&lch->flags.busy_spin);
 FREE_LCH:
     LIST_REMOVE (lch, entry);
     free(lch);
-
-    return EMEM;
+CH_SPIN:
+    pthread_spin_destroy (&md_ch_spin[id]);
+    return -1;
 }
 
 static void channels_exit (struct app_channel *lch)
@@ -355,10 +380,12 @@ static void channels_exit (struct app_channel *lch)
     app_exit_blk_md (lch);
     app_exit_bbt (lch);
 
-    LIST_REMOVE (lch, entry);
     pthread_spin_destroy (&lch->flags.busy_spin);
     pthread_spin_destroy (&lch->flags.active_spin);
     pthread_spin_destroy (&lch->flags.need_gc_spin);
+    pthread_spin_destroy (&md_ch_spin[lch->app_ch_id]);
+
+    LIST_REMOVE (lch, entry);
     free(lch);
 }
 

@@ -38,7 +38,7 @@ static int ch_map_create (struct app_channel *lch)
     for (i = 0; i < md->entries; i++) {
         ent = ((struct app_map_entry *) md->tbl) + i;
         memset (ent, 0x0, sizeof (struct app_map_entry));
-        ent->lba = i;
+        ent->lba = (md->entries * lch->app_ch_id) + i;
     }
 
     return 0;

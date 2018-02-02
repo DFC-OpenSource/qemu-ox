@@ -43,11 +43,15 @@
 #define APP_IO_NORMAL   0
 #define APP_IO_RESERVED 1 /* Used for FTL reserved blocks */
 
-#define APPNVM_FLUSH_RETRY      3
-#define APPNVM_GC_THRESD        0.6
-#define APPNVM_GC_TARGET_RATE   0.9
-#define APPNVM_GC_MAX_BLKS      25
-#define APPNVM_GC_OVERPROV      0.1
+#define APP_INVALID_SECTOR 0
+#define APP_INVALID_PAGE   1
+
+#define APPNVM_FLUSH_RETRY          3
+#define APPNVM_GC_THRESD            0.75
+#define APPNVM_GC_TARGET_RATE       0.9
+#define APPNVM_GC_MAX_BLKS          25
+#define APPNVM_GC_MIN_FREE_CH_BLKS  8
+#define APPNVM_GC_OVERPROV          0.25
 
 #define APPNVM_DEBUG       0
 
@@ -113,6 +117,7 @@ struct app_io_data {
     uint8_t          ***sec_vec; /* Array of sectors + OOB [plane][sector] */
     uint32_t            meta_sz;
     uint32_t            buf_sz;
+    uint8_t            *mod_oob; /* OOB as SGL can be buffered here */
 };
 
 enum app_pg_type {
@@ -125,7 +130,8 @@ enum app_pg_type {
 enum app_blk_md_flags {
     APP_BLK_MD_USED = (1 << 0),
     APP_BLK_MD_OPEN = (1 << 1),
-    APP_BLK_MD_LINE = (1 << 2)
+    APP_BLK_MD_LINE = (1 << 2),
+    APP_BLK_MD_AVLB = (1 << 3)  /* Available: Good block and not reserved */
 };
 
 struct app_blk_md_entry {
@@ -202,6 +208,8 @@ typedef int                      (app_md_create)(struct app_channel *);
 typedef int                      (app_md_flush) (struct app_channel *);
 typedef int                      (app_md_load) (struct app_channel *);
 typedef struct app_blk_md_entry *(app_md_get) (struct app_channel *, uint16_t);
+typedef void                     (app_md_invalidate)(struct app_channel *,
+                                          struct nvm_ppa_addr *, uint8_t full);
 
 typedef int  (app_ch_prov_init) (struct app_channel *);
 typedef void (app_ch_prov_exit) (struct app_channel *);
@@ -257,6 +265,7 @@ struct app_global_md {
     app_md_flush       *flush_fn;
     app_md_load        *load_fn;
     app_md_get         *get_fn;
+    app_md_invalidate  *invalidate_fn;
 };
 
 struct app_ch_prov {

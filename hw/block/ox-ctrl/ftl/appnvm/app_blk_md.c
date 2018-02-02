@@ -27,6 +27,8 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 #include "appnvm.h"
 
+extern pthread_spinlock_t *md_ch_spin;
+
 static int blk_md_create (struct app_channel *lch)
 {
     int i;
@@ -86,7 +88,7 @@ static int blk_md_load (struct app_channel *lch)
         pg -= md_pgs;
         ppa.g.pg = pg;
         ppa.g.blk = lch->meta_blk;
-        
+
         if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
                             md->entries, sizeof(struct app_blk_md_entry),
                             APP_TRANS_FROM_NVM, APP_IO_RESERVED))
@@ -146,7 +148,7 @@ static int blk_md_flush (struct app_channel *lch)
     /* flush the block metadata table to nvm */
     ppa.g.pg = pg;
     ppa.g.blk = lch->meta_blk;
-    
+
     if (app_nvm_seq_transfer (io, &ppa, md->tbl, md_pgs, ent_per_pg,
                             md->entries, sizeof(struct app_blk_md_entry),
                             APP_TRANS_TO_NVM, APP_IO_RESERVED))
@@ -172,9 +174,38 @@ static struct app_blk_md_entry *blk_md_get (struct app_channel *lch,
     return (struct app_blk_md_entry *) (md->tbl + (lun * lun_sz));
 }
 
+static void blk_md_invalidate (struct app_channel *lch,
+                                        struct nvm_ppa_addr *ppa, uint8_t full)
+{
+    uint16_t pl_i;
+    uint8_t *pg_map, off;
+    struct app_blk_md_entry *lun;
+    struct nvm_mmgr_geometry *g = lch->ch->geometry;
+
+    off = (1 << g->sec_per_pg) - 1;
+
+    lun = appnvm()->md.get_fn (lch, ppa->g.lun);
+    pg_map = &lun[ppa->g.blk].pg_state[ppa->g.pg * g->n_of_planes];
+
+    pthread_spin_lock (&md_ch_spin[ppa->g.ch]);
+
+    /* If full is > 0, invalidate all sectors in the page */
+    if (full) {
+        for (pl_i = 0; pl_i < g->n_of_planes; pl_i++)
+            pg_map[pl_i] = off;
+        lun[ppa->g.blk].invalid_sec += g->sec_per_pl_pg;
+    } else {
+        pg_map[ppa->g.pl] |= 1 << ppa->g.sec;
+        lun[ppa->g.blk].invalid_sec++;
+    }
+
+    pthread_spin_unlock (&md_ch_spin[ppa->g.ch]);
+}
+
 void blk_md_register (void) {
-    appnvm()->md.create_fn = blk_md_create;
-    appnvm()->md.flush_fn = blk_md_flush;
-    appnvm()->md.load_fn = blk_md_load;
-    appnvm()->md.get_fn = blk_md_get;
+    appnvm()->md.create_fn      = blk_md_create;
+    appnvm()->md.flush_fn       = blk_md_flush;
+    appnvm()->md.load_fn        = blk_md_load;
+    appnvm()->md.get_fn         = blk_md_get;
+    appnvm()->md.invalidate_fn  = blk_md_invalidate;
 }
