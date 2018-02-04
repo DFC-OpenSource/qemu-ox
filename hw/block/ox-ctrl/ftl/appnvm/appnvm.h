@@ -53,7 +53,9 @@
 #define APPNVM_GC_MIN_FREE_BLKS     16
 #define APPNVM_GC_OVERPROV          0.25
 
-#define APPNVM_DEBUG       0
+#define APPNVM_DEBUG_CH_PROV    0
+#define APPNVM_DEBUG_GL_PROV    0
+#define APPNVM_DEBUG_GC         1
 
 enum app_functions {
     APP_FN_GLOBAL   = 0
@@ -243,8 +245,12 @@ typedef void (app_lba_io_exit) (void);
 typedef int  (app_lba_io_submit) (struct nvm_io_cmd *);
 typedef void (app_lba_io_callback) (struct nvm_io_cmd *);
 
-typedef int  (app_gc_init) (void);
-typedef void (app_gc_exit) (void);
+typedef int                       (app_gc_init) (void);
+typedef void                      (app_gc_exit) (void);
+typedef struct app_blk_md_entry **(app_gc_target) (struct app_channel *,
+                                                                    uint32_t *);
+typedef int (app_gc_recycle_blk)(struct app_channel *,struct app_blk_md_entry *,
+                                                uint16_t tid, uint32_t *failed);
 
 struct app_channels {
     app_ch_init         *init_fn;
@@ -313,6 +319,8 @@ struct app_lba_io {
 struct app_gc {
     app_gc_init         *init_fn;
     app_gc_exit         *exit_fn;
+    app_gc_target       *target_fn;
+    app_gc_recycle_blk  *recycle_fn;
 };
 
 struct app_global {

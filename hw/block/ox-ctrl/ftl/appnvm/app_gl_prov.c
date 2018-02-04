@@ -113,7 +113,7 @@ static struct app_prov_ppas *gl_prov_get_ppa_list (uint32_t pgs)
         dec_ch[ch_id] = NULL;
     }
 
-    if (APPNVM_DEBUG)
+    if (APPNVM_DEBUG_GL_PROV)
         printf ("\n[appnvm (gl_prov): Active Channels: %d]\n", nact_ch);
 
     if (!nact_ch)
@@ -210,7 +210,7 @@ REDIST:
     }
     prov_ppa->nppas = tppas;
 
-    if (APPNVM_DEBUG)
+    if (APPNVM_DEBUG_GL_PROV)
         printf ("\n[appnvm (gl_prov): GET - %d ppas]\n", tppas);
 
     for (ch_id = 0; ch_id < app_nch; ch_id++) {
@@ -220,7 +220,7 @@ REDIST:
         if (tmp_ppa[ch_id].ppa != NULL)
             free (tmp_ppa[ch_id].ppa);
 
-        if (APPNVM_DEBUG)
+        if (APPNVM_DEBUG_GL_PROV)
             printf (" [appnvm (gl_prov): GET - Ch %d, %d ppas, %d users]\n",
                       ch_id, tmp_ppa[ch_id].nch, appnvm_ch_nthreads(ch[ch_id]));
     }
@@ -246,13 +246,13 @@ static void gl_prov_free_ppa_list (struct app_prov_ppas *ppas)
         return;
     }
 
-    if (APPNVM_DEBUG)
+    if (APPNVM_DEBUG_GL_PROV)
         printf ("\n[appnvm (gl_prov): FREE - %d ppas]\n", ppas->nppas);
 
     for (int i = 0; i < ppas->nch; i++) {
         if (ppas->ch[i] != NULL)
             appnvm_ch_dec_thread(ppas->ch[i]);
-        if (APPNVM_DEBUG)
+        if (APPNVM_DEBUG_GL_PROV)
             printf (" [appnvm (gl_prov): FREE Ch %d - %d users]\n", i,
                                                     appnvm_ch_nthreads(ch[i]));
     }

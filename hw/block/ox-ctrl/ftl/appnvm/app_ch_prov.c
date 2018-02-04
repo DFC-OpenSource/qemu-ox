@@ -393,7 +393,7 @@ NEXT:
 
         appnvm()->ch_prov.check_gc_fn (lch);
 
-        if (APPNVM_DEBUG) {
+        if (APPNVM_DEBUG_CH_PROV) {
             printf("[appnvm (ch_prov): blk GET: (%d/%d/%d/%d) - Free: %d,"
                     " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
                     vblk->addr.g.blk, vblk->blk_md->erase_count,
@@ -438,7 +438,7 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
 
     pthread_mutex_unlock(&prov->ch_mutex);
 
-    if (APPNVM_DEBUG) {
+    if (APPNVM_DEBUG_CH_PROV) {
         printf("[appnvm (ch_prov): blk PUT: (%d %d %d) - Free: %d,"
                 " Used: %d, Open: %d]\n", vblk->addr.g.ch, vblk->addr.g.lun,
                 vblk->addr.g.blk, p_lun->nfree_blks, p_lun->nused_blks,
@@ -523,7 +523,7 @@ NEXT_LUN:
     /* Check if line has at least 1 block available */
     if (targets == 0) {
         log_err("[appnvm (ch_prov): CH %d has no blocks left.]",lch->ch->ch_id);
-        if (APPNVM_DEBUG)
+        if (APPNVM_DEBUG_CH_PROV)
             printf("appnvm(ch_prv): CH %d has no blocks left\n",lch->ch->ch_id);
         return -1;
     }
@@ -535,7 +535,7 @@ NEXT_LUN:
     if (prov->line.current_blk >= targets)
         prov->line.current_blk = 0;
 
-    if (APPNVM_DEBUG) {
+    if (APPNVM_DEBUG_CH_PROV) {
         printf ("[appnvm (ch_prov): Line is renewed: ");
         for (int j = 0; j < targets; j++)
             printf ("(%d %d %d)", prov->line.vblks[j]->addr.g.ch,
@@ -567,7 +567,7 @@ static int ch_prov_init (struct app_channel *lch)
 
     if (ch_prov_renew_line (lch)) {
         log_err ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
-        if (APPNVM_DEBUG)
+        if (APPNVM_DEBUG_CH_PROV)
             printf ("[appnvm (ch_prov): CHANNEL %d is FULL!]\n",lch->ch->ch_id);
         goto FREE_BLKS;
     }

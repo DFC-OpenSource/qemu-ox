@@ -31,7 +31,6 @@
 #include <string.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#define APP_GC_DEBUG         1
 #define APP_GC_PARALLEL_CH   1
 #define APP_GC_DELAY_US      10000
 #define APP_GC_DELAY_CH_BUSY 1000
@@ -43,11 +42,8 @@ static uint8_t               stop;
 static struct app_io_data ***gc_buf;
 static uint16_t              buf_pg_sz, buf_oob_sz, buf_npg;
 
-static uint32_t recycled_blks;
-static uint64_t moved_sec;
-
-extern pthread_mutex_t gc_ns_mutex;
-extern pthread_spinlock_t *md_ch_spin;
+static uint32_t gc_recycled_blks;
+static uint64_t gc_moved_sec, gc_pad_sec, gc_err_sec, gc_wro_sec, gc_map_pgs;
 
 pthread_mutex_t *gc_cond_mutex;
 pthread_cond_t  *gc_cond;
@@ -226,9 +222,12 @@ static int gc_read_blk (struct app_channel *lch,
 
             oob = (struct app_pg_oob *) io->oob_vec[0];
             if (oob->pg_type == APP_PG_MAP) {
-                if (gc_proc_mapping_pg (lch, io, &ppa, oob))
+                if (gc_proc_mapping_pg (lch, io, &ppa, oob)) {
+                    gc_err_sec += lch->ch->geometry->sec_per_pl_pg;
                     return -1;
+                }
                 nsec += lch->ch->geometry->sec_per_pl_pg;
+                gc_map_pgs++;
             }
         }
     }
@@ -300,6 +299,7 @@ static int gc_move_sector (struct app_channel *lch, struct app_io_data *w_io,
             break;
         case APP_PG_PADDING:
             appnvm()->md.invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
+            gc_pad_sec++;
             return -1;
         case APP_PG_MAP:
         case APP_PG_RESERVED:
@@ -323,6 +323,7 @@ static int gc_move_sector (struct app_channel *lch, struct app_io_data *w_io,
     return 0;
 
 ERR:
+    gc_wro_sec++;
     log_info ("[gc: Suspicious data type (%d). LBA %lu, PPA "
             "(%d/%d/%d/%d/%d/%d)\n", sec_oob->pg_type, sec_oob->lba,
             old_ppa->g.ch, old_ppa->g.lun, old_ppa->g.blk,
@@ -417,10 +418,10 @@ static int gc_recycle_blks (struct app_channel *lch,
             log_err ("[appnvm (gc): Read block / move mapping failed.]");
             continue;
         }
-        moved_sec += blk_sec;
+        gc_moved_sec += blk_sec;
         count_sec += blk_sec;
 
-        blk_sec = gc_process_blk (lch, list[blk_i], tid, &failed_sec);
+        blk_sec = appnvm()->gc.recycle_fn (lch, list[blk_i], tid, &failed_sec);
         if (blk_sec < 0) {
             log_err ("[appnvm (gc): Process block failed.]");
             continue;
@@ -436,16 +437,28 @@ static int gc_recycle_blks (struct app_channel *lch,
                 goto COUNT;
             }
             recycled++;
-            recycled_blks++;
+            gc_recycled_blks++;
         }
 
 COUNT:
-        moved_sec += blk_sec;
-        count_sec += blk_sec;
+        gc_moved_sec += blk_sec;
+        gc_err_sec   += failed_sec;
+        count_sec    += blk_sec;
     }
 
     *ch_sec = count_sec;
     return recycled;
+}
+
+static void gc_print_stats (struct app_channel *lch, uint32_t recycled,
+                                                              uint32_t blk_sec)
+{
+    printf (" GC (%d): (%d/%d) %.2f MB, T: (%d/%lu) %.2f MB, "
+            "(M%lu/P%lu/F%lu/W%lu) \n", lch->app_ch_id, recycled, blk_sec,
+            (4.0 * (double) blk_sec) / (double) 1024,
+            gc_recycled_blks, gc_moved_sec,
+            (4.0 * (double) gc_moved_sec) / (double) 1024,
+            gc_map_pgs, gc_pad_sec, gc_err_sec, gc_wro_sec);
 }
 
 static void *gc_run_ch (void *arg)
@@ -472,7 +485,7 @@ static void *gc_run_ch (void *arg)
             if (!appnvm_ch_nthreads (lch)) {
                 loop = 0;
 
-                list = gc_get_target_blks (lch, &victims);
+                list = appnvm()->gc.target_fn (lch, &victims);
                 if (!list || !victims) {
                     usleep (APP_GC_DELAY_US);
                     break;
@@ -485,13 +498,8 @@ static void *gc_run_ch (void *arg)
                 if (recycled != victims)
                     log_info ("[appnvm (gc): %d recycled, %d with errors.]",
                                                  recycled, victims - recycled);
-
-                if (APP_GC_DEBUG)
-                    printf (" GC (%d): (%d/%d) %.2f MB - Total: (%d/%lu) "
-                            "%.2f MB\n", lch->app_ch_id, recycled, blk_sec,
-                        (4.0 * (double) blk_sec) / (double) 1024,
-                        recycled_blks, moved_sec,
-                        (4.0 * (double) moved_sec) / (double) 1024);
+                if (APPNVM_DEBUG_GC)
+                    gc_print_stats (lch, recycled, blk_sec);
             } else {
                 usleep (APP_GC_DELAY_CH_BUSY);
             }
@@ -643,8 +651,8 @@ static int gc_init (void)
     if (nch != app_nch)
         goto FREE_CH;
 
-    recycled_blks = 0;
-    moved_sec = 0;
+    gc_recycled_blks = 0;
+    gc_moved_sec = gc_pad_sec = gc_err_sec = gc_wro_sec = gc_map_pgs = 0;
 
     geo = ch[0]->ch->geometry;
     buf_pg_sz = geo->pg_size;
@@ -713,6 +721,8 @@ static void gc_exit (void)
 
 void gc_register (void)
 {
-    appnvm()->gc.init_fn = gc_init;
-    appnvm()->gc.exit_fn = gc_exit;
+    appnvm()->gc.init_fn    = gc_init;
+    appnvm()->gc.exit_fn    = gc_exit;
+    appnvm()->gc.target_fn  = gc_get_target_blks;
+    appnvm()->gc.recycle_fn = gc_process_blk;
 }
