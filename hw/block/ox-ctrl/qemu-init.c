@@ -10,6 +10,7 @@
 #include "sysemu/block-backend.h"
 #include "hw/block/ox-ctrl/include/ssd.h"
 
+extern struct core_struct core;
 QemuOxCtrl *qemuOxCtrl;
 
 static int ox_init(PCIDevice *pci_dev)
@@ -19,8 +20,18 @@ static int ox_init(PCIDevice *pci_dev)
     argv[0] = malloc (8);
     argv[1] = malloc (6);
     memcpy(argv[0], "ox-ctrl\0", 8);
-    memcpy(argv[1], qemuOxCtrl->mode, 5);
-    argv[1][5] = '\0';
+    memcpy(argv[1], (qemuOxCtrl->debug) ? "debug\0" : "start\0", 6);
+
+    memset (&core, 0x0, sizeof (struct core_struct));
+
+    if (qemuOxCtrl->lnvm) {
+        core.lnvm = 1;
+        core.std_ftl = FTL_ID_LNVM;
+    } else {
+        core.std_ftl = FTL_ID_APPNVM;
+    }
+
+    core.volt = qemuOxCtrl->volt;
 
     blkconf_serial(&qemuOxCtrl->conf, &qemuOxCtrl->serial);
 
@@ -38,7 +49,9 @@ static void ox_exit(PCIDevice *pci_dev)
 static Property ox_props[] = {
     DEFINE_BLOCK_PROPERTIES(QemuOxCtrl, conf),
     DEFINE_PROP_STRING("serial", QemuOxCtrl, serial),
-    DEFINE_PROP_STRING("mode", QemuOxCtrl, mode),
+    DEFINE_PROP_UINT8("debug", QemuOxCtrl, debug, 0),
+    DEFINE_PROP_UINT8("lnvm", QemuOxCtrl, lnvm, 1),
+    DEFINE_PROP_UINT8("volt", QemuOxCtrl, volt, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

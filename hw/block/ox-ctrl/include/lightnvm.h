@@ -5,9 +5,9 @@
 #include <stdio.h>
 
 #define LNVM_SEC_BITS       2
-#define LNVM_PG_BITS        7
+#define LNVM_PG_BITS        6
 #define LNVM_PL_BITS        1
-#define LNVM_BLK_BITS       5
+#define LNVM_BLK_BITS       6
 #define LNVM_LUN_BITS       2
 #define LNVM_CH_BITS        3
 #define LNVM_RSV_BITS       44

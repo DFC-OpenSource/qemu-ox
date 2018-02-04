@@ -8,7 +8,6 @@
 #include <math.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
-#if LIGHTNVM
 #include "hw/block/ox-ctrl/include/lightnvm.h"
 #include "hw/block/ox-ctrl/include/uatomic.h"
 
@@ -106,9 +105,9 @@ out:
 uint16_t lnvm_set_bb_tbl(NvmeCtrl *n, NvmeCmd *nvmecmd, NvmeRequest *req)
 {
     LnvmSetBBTbl *cmd = (LnvmSetBBTbl*)nvmecmd;
+    struct nvm_ftl_cap_set_bbtbl_st arg;
     struct nvm_ppa_addr *psl;
     uint16_t bbtbl_format = FTL_BBTBL_BYTE;
-    void *arg[4];
     int i, ret;
 
     uint64_t spba = cmd->spba;
@@ -128,11 +127,11 @@ uint16_t lnvm_set_bb_tbl(NvmeCtrl *n, NvmeCmd *nvmecmd, NvmeRequest *req)
     for(i = 0; i < nlb; i++) {
         /* set single block to FTL */
         psl[i].g.sec = 0;
-        arg[0] = &psl[i].ppa;
-        arg[1] = &value;
-        arg[2] = &bbtbl_format;
+        arg.ppa.ppa = psl[i].ppa;
+        arg.value = value;
+        arg.bb_format = bbtbl_format;
 
-        ret = nvm_ftl_cap_exec(FTL_CAP_SET_BBTBL, arg, 3);
+        ret = nvm_ftl_cap_exec(FTL_CAP_SET_BBTBL, (void *) &arg);
         if (ret)
             return NVME_INVALID_FIELD;
     }
@@ -144,6 +143,7 @@ uint16_t lnvm_get_bb_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
     LnvmCtrl *ln;
     LnvmIdGroup *c;
+    struct nvm_ftl_cap_get_bbtbl_st arg;
     LnvmGetBBTbl *bbtbl = (LnvmGetBBTbl*)cmd;
 
     uint32_t nsid = bbtbl->nsid;
@@ -152,7 +152,6 @@ uint16_t lnvm_get_bb_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
     uint32_t nr_blocks;
     LnvmBBTbl *bb_tbl;
     int ret = NVME_SUCCESS;
-    void *arg[4];
     uint16_t bbtbl_format = FTL_BBTBL_BYTE;
 
     if (nsid == 0 || nsid > n->num_namespaces) {
@@ -181,12 +180,12 @@ uint16_t lnvm_get_bb_tbl(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
     bb_tbl->tblks = nr_blocks;
 
     /* read bb_tbl from FTL */
-    arg[0] = &ppa;
-    arg[1] = bb_tbl->blk;
-    arg[2] = &nr_blocks;
-    arg[3] = &bbtbl_format;
+    arg.ppa.ppa = ppa.ppa;
+    arg.bbtbl = bb_tbl->blk;
+    arg.nblk = nr_blocks;
+    arg.bb_format = bbtbl_format;
 
-    ret = nvm_ftl_cap_exec(FTL_CAP_GET_BBTBL, arg, 4);
+    ret = nvm_ftl_cap_exec(FTL_CAP_GET_BBTBL, (void *) &arg);
     if (ret)
         goto clean;
 
@@ -318,7 +317,6 @@ uint16_t lnvm_rw(NvmeCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
         psl[0].ppa = spba;
     }
 
-    req->lightnvm_slba = lrw->slba;
     req->is_write = is_write;
 
     sppa = eppa = nvme_gen_to_dev_addr(ln, &psl[0]);
@@ -527,6 +525,7 @@ int lnvm_init(NvmeCtrl *n)
                   (tot_blks - rsv_blks)) / 1024);
     }
 
+    syslog (LOG_INFO,"  [nvm: LightNVM is registered]\n");
+
     return 0;
 }
-#endif /* LIGHTNVM */

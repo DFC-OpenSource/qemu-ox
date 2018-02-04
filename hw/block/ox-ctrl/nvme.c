@@ -12,9 +12,7 @@
 #include "hw/block/ox-ctrl/include/ox-ndp.h"
 #include <hw/pci/pci.h>
 
-#if LIGHTNVM
 #include "hw/block/ox-ctrl/include/lightnvm.h"
-#endif /* LIGHTNVM */
 
 extern struct core_struct core;
 static uint64_t           nvm_ns_size;
@@ -50,11 +48,11 @@ static void nvme_set_default (NvmeCtrl *n)
     n->vid = PCI_VENDOR_ID_INTEL;
     n->did = PCI_DEVICE_ID_LS2085;
 
-#if LIGHTNVM
-    n->vid = PCI_VENDOR_ID_LNVM;
-    n->did = PCI_DEVICE_ID_LNVM;
-    lnvm_set_default(&n->lightnvm_ctrl);
-#endif /* LIGHTNVM */
+    if (core.lnvm) {
+        n->vid = PCI_VENDOR_ID_LNVM;
+        n->did = PCI_DEVICE_ID_LNVM;
+        lnvm_set_default(&n->lightnvm_ctrl);
+    }
 }
 
 static void nvme_regs_setup (NvmeCtrl *n)
@@ -67,10 +65,12 @@ static void nvme_regs_setup (NvmeCtrl *n)
     NVME_CAP_SET_DSTRD(n->nvme_regs.vBar.cap, n->db_stride);
     NVME_CAP_SET_NSSRS(n->nvme_regs.vBar.cap, 0);
     NVME_CAP_SET_CSS(n->nvme_regs.vBar.cap, 1);
-#if LIGHTNVM
-    NVME_CAP_SET_LIGHTNVM(n->nvme_regs.vBar.cap, 1);
-    NVME_CAP_SET_LIGHTNVM(n->nvme_regs.bBar.cap.lnvm, 1);
-#endif /* LIGHTNVM */
+
+    if (core.lnvm) {
+        NVME_CAP_SET_LIGHTNVM(n->nvme_regs.vBar.cap, 1);
+        NVME_CAP_SET_LIGHTNVM(n->nvme_regs.bBar.cap.lnvm, 1);
+    }
+
     NVME_CAP_SET_MPSMIN(n->nvme_regs.vBar.cap, n->mpsmin);
     NVME_CAP_SET_MPSMAX(n->nvme_regs.vBar.cap, n->mpsmax);
 
@@ -97,7 +97,7 @@ static int nvme_init_ctrl (NvmeCtrl *n)
     id->ieee[1] = 0x02;
     id->ieee[2] = 0xb3;
     id->cmic = 0;
-    id->mdts = 8;
+    id->mdts = 8; /* 4k * (1 << 8) = 1 MB max transfer per NVMe I/O */
     id->oacs = cpu_to_le16(NVME_OACS_FORMAT);
     id->acl = 3;
     id->aerl = 3;
@@ -169,12 +169,10 @@ static int nvme_init_ctrl (NvmeCtrl *n)
 
     nvme_regs_setup (n);
 
-#if LIGHTNVM
-    if (lnvm_dev(n)) {
+    if (core.lnvm && lnvm_dev(n)) {
         NVME_CAP_SET_LIGHTNVM(n->nvme_regs.vBar.cap, 1);
         lnvm_init_id_ctrl(&n->lightnvm_ctrl.id_ctrl);
     }
-#endif /* LIGHTNVM */
 
     n->temperature = NVME_TEMPERATURE;
 
@@ -241,12 +239,10 @@ static int nvme_init_namespaces (NvmeCtrl *n)
 
 	id_ns->nuse = id_ns->ncap = id_ns->nsze = cpu_to_le64(blks);
 
-#if LIGHTNVM
-        if (lnvm_dev(n)) {
+        if (core.lnvm && lnvm_dev(n)) {
             id_ns->vs[0] = 0x1;
             id_ns->nsze = 0;
         }
-#endif /* LIGHTNVM */
 
         ns->id = i + 1;
 	ns->ctrl = n;
@@ -367,6 +363,7 @@ uint16_t nvme_init_sq (NvmeSQ *sq, NvmeCtrl *n, uint64_t dma_addr,
     TAILQ_INIT(&sq->out_req_list);
     for (i = 0; i < sq->size; i++) {
         sq->io_req[i].sq = sq;
+        pthread_mutex_init (&sq->io_req[i].nvm_io.mutex, NULL);
         TAILQ_INSERT_TAIL(&(sq->req_list), &sq->io_req[i], entry);
     }
 
@@ -451,6 +448,9 @@ static int nvme_start_ctrl (NvmeCtrl *n)
 
 void nvme_free_sq (NvmeSQ *sq, NvmeCtrl *n)
 {
+    for (int i = 0; i < sq->size; i++)
+        pthread_mutex_destroy (&sq->io_req[i].nvm_io.mutex);
+
     n->sq[sq->sqid] = NULL;
     FREE_VALID (sq->io_req);
     FREE_VALID (sq->prp_list);
@@ -694,19 +694,19 @@ static void nvme_post_cqe (NvmeCQ *cq, NvmeRequest *req)
     uint8_t phase = cq->phase;
     uint64_t addr;
 
-#if LIGHTNVM
-    LnvmCtrl *ln = &n->lightnvm_ctrl;
-    if (ln->err_write && req->is_write) {
-        if ((ln->err_write_cnt + req->nlb + 1) > ln->err_write) {
-            int bit = ln->err_write - ln->err_write_cnt;
-	    cqe->res64 = 1ULL << bit; // kill first sector in ppa list
-	    req->status = 0x40ff; // FAIL WRITE status code
-	    ln->err_write_cnt = 0;
-            log_info("[lnvm: injected error: %u]\n", bit);
+    if (core.lnvm) {
+        LnvmCtrl *ln = &n->lightnvm_ctrl;
+        if (ln->err_write && req->is_write) {
+            if ((ln->err_write_cnt + req->nlb + 1) > ln->err_write) {
+                int bit = ln->err_write - ln->err_write_cnt;
+                cqe->res64 = 1ULL << bit; // kill first sector in ppa list
+                req->status = 0x40ff; // FAIL WRITE status code
+                ln->err_write_cnt = 0;
+                log_info("[lnvm: injected error: %u]\n", bit);
+            }
+            ln->err_write_cnt += req->nlb + 1;
         }
-	ln->err_write_cnt += req->nlb + 1;
     }
-#endif
 
     if (cq->phys_contig)
 	addr = cq->dma_addr + cq->tail * n->cqe_size;
@@ -836,7 +836,7 @@ uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             if (NVME_OACS_FORMAT & n->id_ctrl.oacs)
                   return nvme_format (n, cmd);
             return NVME_INVALID_OPCODE | NVME_DNR;
-            
+
         /* Near-data processing */
         case NDP_ADM_CMD_INFO:
             return NVME_SUCCESS;
@@ -845,7 +845,6 @@ uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         case NDP_ADM_CMD_DEL_DAEM:
             return NVME_SUCCESS;
 
-#if LIGHTNVM
         case LNVM_ADM_CMD_IDENTITY:
             return lnvm_identity(n, cmd);
         case LNVM_ADM_CMD_GET_L2P_TBL:
@@ -854,7 +853,6 @@ uint16_t nvme_admin_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             return lnvm_get_bb_tbl(n, cmd, req);
         case LNVM_ADM_CMD_SET_BB_TBL:
             return lnvm_set_bb_tbl(n, cmd, req);
-#endif /* LIGHTNVM */
 
         case NVME_ADM_CMD_ACTIVATE_FW:
 	case NVME_ADM_CMD_DOWNLOAD_FW:
@@ -883,8 +881,7 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         printf("\n[%lu] IO CMD 0x%x, nsid: %d, cid: %d\n",
                    n->stat.tot_num_IOCmd, cmd->opcode, cmd->nsid, cmd->cid);
 
-    switch (cmd->opcode) {        
-#if LIGHTNVM
+    switch (cmd->opcode) {
         case LNVM_CMD_PHYS_READ:
             n->stat.tot_num_ReadCmd += 1;
             return lnvm_rw(n, ns, cmd, req);
@@ -892,33 +889,30 @@ static uint16_t nvme_io_cmd (NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         case LNVM_CMD_PHYS_WRITE:
             n->stat.tot_num_WriteCmd += 1;
             return lnvm_rw(n, ns, cmd, req);
-#endif
 
     	case NVME_CMD_READ:
 	    n->stat.tot_num_ReadCmd += 1;
-#if LIGHTNVM
-	    if (lnvm_dev(n))
+
+            if (core.lnvm && lnvm_dev(n))
                 return lnvm_rw(n, ns, cmd, req);
-#endif
+
             return nvme_rw(n, ns, cmd, req);
 
         case NVME_CMD_WRITE:
             n->stat.tot_num_WriteCmd += 1;
             return nvme_rw(n, ns, cmd, req);
 
-#if LIGHTNVM
         case LNVM_CMD_ERASE_SYNC:
             if (lnvm_dev(n))
                 return lnvm_erase_sync(n, ns, cmd, req);
             return NVME_INVALID_OPCODE | NVME_DNR;
-#endif
 
         /* Near-data processing */
         case NDP_EXEC_RUN_JOB:
             return NVME_SUCCESS;
         case NDP_EXEC_DAEM_REQ:
             return NVME_SUCCESS;
-            
+
         /* Commands not supported yet */
 
 	case NVME_CMD_FLUSH:
@@ -1040,6 +1034,14 @@ static void nvme_process_sq (void *opaque)
             if (core.debug) printf("%s",err);
         }
 
+        /* Enqueue completion for flush command and flush everything to NVM */
+        if (sq->sqid && cmd.opcode == NVME_CMD_FLUSH) {
+            req->status = status;
+            nvme_enqueue_req_completion (cq, req);
+            nvm_restart();
+            return;
+        }
+
         /* Enqueue completion in case of admin command */
         if (!sq->sqid && status != NVME_NO_COMPLETE) {
             req->status = status;
@@ -1152,10 +1154,8 @@ void nvme_exit(void)
     FREE_VALID (n->features.int_vector_config);
     FREE_VALID (n->namespaces);
 
-#if LIGHTNVM
-    if (lnvm_dev(n))
+    if (core.lnvm && lnvm_dev(n))
         lightnvm_exit(n);
-#endif /* LIGHTNVM */
 
     pthread_mutex_destroy(&n->req_mutex);
     pthread_mutex_destroy(&n->qs_req_mutex);
@@ -1185,12 +1185,9 @@ int nvme_init(NvmeCtrl *n)
                                                     nvme_init_q_scheduler (n)*/)
         return ENVME_REGISTER;
 
-#if LIGHTNVM
-    if (lnvm_dev(n) && lnvm_init(n))
+    if (core.lnvm && lnvm_dev(n) && lnvm_init(n))
         return ENVME_REGISTER;
 
-    syslog (LOG_INFO,"  [nvm: LightNVM is registered]\n");
-#endif /* LIGHTNVM */
     log_info("  [nvm: NVME standard registered]\n");
 
     return 0;

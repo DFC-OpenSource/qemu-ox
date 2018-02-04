@@ -16,6 +16,8 @@ static struct nvm_mmgr      volt_mmgr;
 static void                 **dma_buf;
 extern struct core_struct   core;
 
+static const char *volt_disk = "volt_disk";
+
 static int volt_start_prp_map(void)
 {
     int i;
@@ -348,6 +350,10 @@ static int volt_host_dma_helper (struct nvm_mmgr_io_cmd *nvm_cmd)
                                             nvm_cmd->md_sz && c == dma_sec - 1)
             volt_oob_reorder (oob_addr, sec_map);
 
+        if (c == dma_sec - 1 && nvm_cmd->force_sync_md)
+            direction = (nvm_cmd->cmdtype == MMGR_READ_PG)
+                                      ? NVM_DMA_SYNC_READ : NVM_DMA_SYNC_WRITE;
+
         ret = nvm_dma ((void *)(dma->virt_addr +
                                 nvm_cmd->sec_sz * c), prp, dma_sz, direction);
         if (ret) break;
@@ -446,8 +452,10 @@ static void volt_execute_io (struct ox_mq_entry *req)
 
     ret = volt_process_io(cmd);
 
-    if (ret) {
-        log_err ("[ERROR: Cmd %x not completed. Aborted.]\n", cmd->cmdtype);
+    if (ret && core.debug) {
+        log_err ("[volt: Cmd 0x%x NOT completed. (%d/%d/%d/%d/%d)]\n",
+                cmd->cmdtype, cmd->ppa.g.ch, cmd->ppa.g.lun, cmd->ppa.g.blk,
+                cmd->ppa.g.pl, cmd->ppa.g.pg);
         cmd->status = NVM_IO_FAIL;
         goto COMPLETE;
     }
@@ -570,20 +578,6 @@ CLEAN:
     return -1;
 }
 
-static void volt_exit (struct nvm_mmgr *mmgr)
-{
-    int i;
-    volt_clean_mem();
-    volt->status.active = 0;
-    ox_mq_destroy(volt->mq);
-    for (i = 0; i < mmgr->geometry->n_of_ch; i++) {
-        pthread_mutex_destroy(&prpmap_mutex[i]);
-        g_free(mmgr->ch_info[i].mmgr_rsv_list);
-        free(mmgr->ch_info[i].ftl_rsv_list);
-    }
-    g_free (volt);
-}
-
 static int volt_set_ch_info (struct nvm_channel *ch, uint16_t nc)
 {
     return 0;
@@ -687,6 +681,101 @@ static void *volt_queue_show (void *arg)
     return NULL;
 }
 
+static int volt_disk_flush (void)
+{
+    FILE *file;
+    uint32_t blk_i, pg_i;
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    uint32_t pg_sz = geo->pg_size + (geo->sec_oob_sz * geo->sec_per_pg);
+    uint32_t tot_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
+    file = fopen(volt_disk, "w+");
+    for (blk_i = 0; blk_i < tot_blk; blk_i++) {
+        for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++) {
+            if (fwrite(volt->blocks[blk_i].pages[pg_i].data, pg_sz, 1, file)<1){
+                fclose (file);
+                return -1;
+            }
+        }
+    }
+
+    fclose (file);
+    return 0;
+}
+
+static int volt_disk_load (void)
+{
+    FILE *file;
+    uint32_t blk_i, pg_i;
+    struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
+    uint32_t pg_sz = geo->pg_size + (geo->sec_oob_sz * geo->sec_per_pg);
+    uint32_t tot_blk = geo->n_of_planes * geo->blk_per_lun * geo->lun_per_ch *
+                                                                   geo->n_of_ch;
+    file = fopen(volt_disk, "r");
+    for (blk_i = 0; blk_i < tot_blk; blk_i++) {
+        for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++) {
+            if (fread(volt->blocks[blk_i].pages[pg_i].data, pg_sz, 1, file)<1) {
+                fclose (file);
+                return -1;
+            }
+        }
+    }
+
+    fclose (file);
+    return 0;
+}
+
+static int volt_init_disk (void)
+{
+    FILE *file;
+
+    file = fopen(volt_disk, "r");
+    if (!file){
+        printf(" [volt: Creating disk...]\n");
+
+        if (volt_disk_flush ())
+            goto WERR;
+    } else {
+        printf(" [volt: Loading disk...]\n");
+
+        fclose (file);
+        if (volt_disk_load ())
+            goto RERR;
+    }
+
+    printf(" [volt: Disk is ready.]\n");
+    return 0;
+
+WERR:
+    remove (volt_disk);
+    printf(" [volt: Disk creation failed!]\n");
+    return -1;
+RERR:
+    printf(" [volt: Disk loading failed!]\n");
+    return -1;
+}
+
+static void volt_exit (struct nvm_mmgr *mmgr)
+{
+    int i;
+
+    if (!core.volt) {
+        printf(" [volt: Flushing disk...]\n");
+        if (volt_disk_flush ())
+            printf (" [volt: Disk flush FAILED.]\n");
+    }
+
+    volt_clean_mem();
+    volt->status.active = 0;
+    ox_mq_destroy(volt->mq);
+    for (i = 0; i < mmgr->geometry->n_of_ch; i++) {
+        pthread_mutex_destroy(&prpmap_mutex[i]);
+        g_free(mmgr->ch_info[i].mmgr_rsv_list);
+        free(mmgr->ch_info[i].ftl_rsv_list);
+    }
+    g_free (volt);
+}
+
 static int volt_init(void)
 {
     struct nvm_mmgr_geometry *geo = volt_mmgr.geometry;
@@ -717,6 +806,11 @@ static int volt_init(void)
 
     if (volt_init_dma_buf()) {
         volt_free_channels(tot_blk);
+        goto OUT;
+    }
+
+    if (!core.volt && volt_init_disk()) {
+        volt_clean_mem();
         goto OUT;
     }
 
