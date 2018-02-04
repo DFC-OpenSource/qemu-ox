@@ -36,6 +36,7 @@
 #define MAP_ADDR_FLAG   ((1 & AND64) << 63)
 
 extern pthread_spinlock_t *md_ch_spin;
+extern uint8_t             map_new;
 
 struct map_cache_entry {
     uint8_t                     dirty;
@@ -165,7 +166,7 @@ static int map_nvm_read (struct map_cache_entry *ent)
 
 static int map_evict_pg_cache (struct map_cache *cache)
 {
-    struct nvm_ppa_addr ppa;
+    struct nvm_ppa_addr old_ppa;
     struct map_cache_entry *cache_ent;
 
     cache_ent = TAILQ_FIRST(&cache->mbu_head);
@@ -178,6 +179,8 @@ static int map_evict_pg_cache (struct map_cache *cache)
     TAILQ_REMOVE(&cache->mbu_head, cache_ent, u_entry);
     cache->nused--;
     pthread_spin_unlock (&cache->mb_spin);
+
+    old_ppa.ppa = cache_ent->ppa.ppa;
 
     if (cache_ent->dirty) {
         if (map_nvm_write (cache_ent, cache_ent->md_entry->lba)) {
@@ -192,12 +195,12 @@ static int map_evict_pg_cache (struct map_cache *cache)
         cache_ent->dirty = 0;
 
         /* Cache entry PPA is set after the write completes */
-    }
 
-    /* Invalidate old page PPAs */
-    ppa.ppa = cache_ent->md_entry->ppa;
-    if (ppa.ppa)
-        appnvm()->md.invalidate_fn (ch[ppa.g.ch], &ppa, APP_INVALID_PAGE);
+        /* Invalidate old page PPAs */
+        if (old_ppa.ppa)
+            appnvm()->md.invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
+                                                             APP_INVALID_PAGE);
+    }
 
     cache_ent->md_entry->ppa = cache_ent->ppa.ppa;
     cache_ent->ppa.ppa = 0;
@@ -260,6 +263,7 @@ static int map_load_pg_cache (struct map_cache *cache,
     }
 
     cache_ent->mutex = &ch[cache->id]->map_md->entry_mutex[pg_off];
+    map_ent = &((struct app_map_entry *) cache_ent->buf)[0];
 
     md_entry->ppa = (uint64_t) cache_ent;
     md_entry->ppa |= MAP_ADDR_FLAG;
@@ -375,6 +379,13 @@ static int map_init (void)
 
     map_ent_per_pg = pg_sz / sizeof (struct app_map_entry);
 
+    /* Recalculate mapping metadata indexes if the table is new */
+    if (map_new) {
+        for (ch_i = 0; ch_i < app_nch; ch_i++)
+            appnvm()->ch_map.create_fn (ch[ch_i]);
+        map_new = 0;
+    }
+
     log_info("    [appnvm: Global Mapping started.]\n");
 
     return 0;
@@ -466,8 +477,8 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
     struct nvm_ppa_addr ppa;
     int ret = 0;
 
-    ch_map = index / ch[0]->map_md->entries;
-    pg_off = index % ch[0]->map_md->entries;
+    ch_map = index % app_nch;
+    pg_off = index / app_nch;
 
     md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
     if (!md_ent) {
@@ -491,7 +502,7 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
     if (!addr->g.flag) {
 
         if (addr->addr != old_ppa)
-            ret = -1;
+            ret = 1;
         else
             addr->addr = new_ppa;
 
@@ -499,25 +510,26 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
 
         cache_ent = (struct map_cache_entry *) ((uint64_t) addr->g.addr);
         if (cache_ent->ppa.ppa != old_ppa)
-            ret = -1;
+            ret = 2;
         else
             cache_ent->ppa.ppa = new_ppa;
 
     }
     pthread_mutex_unlock (&ch[ch_map]->map_md->entry_mutex[pg_off]);
 
+    ppa.ppa = old_ppa;
+    if (old_ppa)
+        appnvm()->md.invalidate_fn (ch[ppa.g.ch], &ppa, APP_INVALID_PAGE);
+
     return ret;
 }
 
 static int map_upsert (uint64_t lba, uint64_t ppa)
 {
-    uint8_t *pg_map;
     uint32_t ch_map, ent_off;
-    struct nvm_mmgr_geometry *g;
     struct app_map_entry *map_ent;
     struct map_cache_entry *cache_ent;
     struct nvm_ppa_addr old_ppa, addr;
-    struct app_blk_md_entry *blk_md;
 
     ch_map = (lba / map_ent_per_pg) % app_nch;
     ent_off = lba % map_ent_per_pg;
@@ -543,22 +555,9 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
 
     /* If LBA is not new, mark old PPA page as invalid for GC */
     old_ppa.ppa = map_ent->ppa;
-    if (map_ent->ppa) {
-
-        g = ch[ch_map]->ch->geometry;
-        blk_md = appnvm()->md.get_fn (ch[old_ppa.g.ch], old_ppa.g.lun);
-        pg_map = &blk_md[old_ppa.g.blk].pg_state[old_ppa.g.pg * g->n_of_planes];
-
-        if (!(pg_map[old_ppa.g.pl] & (1 << (old_ppa.g.sec)))) {
-            pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
-
-            pg_map[old_ppa.g.pl] |= 1 << old_ppa.g.sec;
-            blk_md[old_ppa.g.blk].invalid_sec++;
-
-            pthread_spin_unlock (&md_ch_spin[old_ppa.g.ch]);
-        }
-
-    }
+    if (map_ent->ppa)
+        appnvm()->md.invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
+                                                           APP_INVALID_SECTOR);
 
     pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
     map_ent->ppa = ppa;

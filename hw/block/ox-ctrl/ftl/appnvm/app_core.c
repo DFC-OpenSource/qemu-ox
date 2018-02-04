@@ -421,6 +421,9 @@ static void app_exit (void)
 
 static int app_global_init (void)
 {
+    if (!app_nch)
+        return 0;
+
     if (appnvm()->gl_prov.init_fn ()) {
         log_err ("[appnvm: Global Provisioning NOT started.\n");
         return -1;

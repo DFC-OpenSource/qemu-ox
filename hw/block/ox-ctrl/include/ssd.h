@@ -40,10 +40,10 @@
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 
-#define VERSION     1
-#define PATCH       4
+#define VERSION     2
+#define PATCH       0
 #define SUBLEVEL    0
-#define LABEL       "The Lonely Dragon"
+#define LABEL       "Hoping one's son will become a dragon"
 #define OX_VER      STR(VERSION) "." STR(PATCH) "." STR(SUBLEVEL)
 #define OX_LABEL    OX_VER "-" LABEL
 

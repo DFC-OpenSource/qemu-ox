@@ -141,10 +141,8 @@ COMPLETE_LBA:
         if (cmd->cmdtype == MMGR_WRITE_PG && lba[i] == last_lba && lcmd->prov) {
 
             if (!nvme_cmd) {
-                if (lcmd->prov) {
-                    log_info ("[appnvm(lba_io): Using LBA to free PPAs.]");
+                if (lcmd->prov)
                     last_lba->prov = lcmd->prov;
-                }
             } else {
                 nvme_lba = (struct lba_io_sec_ent *) nvme_cmd->mmgr_io
                                                     [lba[i]->lba_id / 4].rsvd;

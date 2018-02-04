@@ -127,10 +127,12 @@ static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
 
             if (    (lun[blk_i].flags & APP_BLK_MD_USED) &&
                    !(lun[blk_i].flags & APP_BLK_MD_OPEN) &&
-                     lun[blk_i].current_pg == lch->ch->geometry->pg_per_blk) {
+                     lun[blk_i].current_pg == lch->ch->geometry->pg_per_blk &&
+                     lun[blk_i].invalid_sec > 0) {
 
-                count++;
-                list = realloc(list, sizeof(struct app_blk_md_entry *) * count);
+                count += 1;
+                list = realloc(list, sizeof(struct app_blk_md_entry *) *
+                                                                   (int) count);
                 if (!list)
                     goto FREE;
                 list[(int)count - 1] = &lun[blk_i];
@@ -147,7 +149,7 @@ static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
         min_inv *= inv_rate;
 
     nblks = gc_bucket_sort(list, count, lch->ch->geometry->sec_per_blk,min_inv);
-    if (nblks < 0)
+    if (nblks <= 0)
         goto FREE;
 
     *c = nblks;
@@ -158,17 +160,6 @@ FREE:
         free (list);
     *c = 0;
     return NULL;
-}
-
-static void gc_invalidate_err_pgs (struct app_channel *lch,
-                                                    struct nvm_ppa_addr **list)
-{
-    uint32_t pg_i;
-    struct nvm_mmgr_geometry *g = lch->ch->geometry;
-
-    for (pg_i = 0; pg_i < g->pg_per_blk; pg_i++)
-        if (list[pg_i][0].ppa)
-            appnvm()->md.invalidate_fn (lch, &list[pg_i][0], APP_INVALID_PAGE);
 }
 
 static int gc_check_valid_pg (struct app_channel *lch,
@@ -188,12 +179,38 @@ static int gc_check_valid_pg (struct app_channel *lch,
     return map;
 }
 
+static int gc_proc_mapping_pg (struct app_channel *lch, struct app_io_data *io,
+                           struct nvm_ppa_addr *old_ppa, struct app_pg_oob *oob)
+{
+    struct nvm_ppa_addr ppa_list[lch->ch->geometry->sec_per_pl_pg];
+
+    if (appnvm()->ch_prov.get_ppas_fn (lch, ppa_list, 1))
+        return -1;
+
+    if (app_pg_io (lch, MMGR_WRITE_PG, (void **) io->pl_vec, ppa_list))
+        goto ERR;
+
+        /* TODO: If write fails, tell provisioning to recycle
+         * current block and abort any write to the blocks,
+         * otherwise we loose the blk sequential writes guarantee */
+
+    if (appnvm()->gl_map.upsert_md_fn (oob->lba, ppa_list[0].ppa, old_ppa->ppa))
+        goto ERR;
+
+    return 0;
+
+ERR:
+    appnvm()->md.invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
+    return -1;
+}
+
 static int gc_read_blk (struct app_channel *lch,
                                  struct app_blk_md_entry *blk_md, uint16_t tid)
 {
-    uint32_t pg_i;
+    uint32_t pg_i, nsec = 0;
     struct nvm_ppa_addr ppa;
     struct app_io_data *io;
+    struct app_pg_oob *oob;
 
     for (pg_i = 0; pg_i < lch->ch->geometry->pg_per_blk; pg_i++) {
 
@@ -206,376 +223,227 @@ static int gc_read_blk (struct app_channel *lch,
 
             if (app_pg_io (lch, MMGR_READ_PG, (void **) io->pl_vec, &ppa))
                 return -1;
-        }
-    }
 
-    return 0;
-}
-
-static uint32_t gc_move_single_sector (struct app_channel *lch,
-        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
-        uint16_t tid, uint32_t pg_i, uint32_t sec_i, uint32_t w_ppa_off)
-{
-    uint32_t pl, sec;
-    uint32_t w_pl, w_pg, w_sec, w_sec_i;
-    uint8_t *pg_map, *data, *oob, *w_oob;
-
-    struct nvm_ppa_addr *old_ppa;
-    struct app_io_data *io, *w_io;
-    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
-
-    pg_map = &blk_md->pg_state[pg_i * geo->n_of_planes];
-
-    /* Check if sector is valid */
-    pl  = sec_i / geo->sec_per_pg;
-    sec = sec_i % geo->sec_per_pg;
-    if (!(pg_map[pl] & (1 << sec))) {
-
-        w_pg    = w_ppa_off / geo->sec_per_pl_pg;
-        w_sec_i = w_ppa_off % geo->sec_per_pl_pg;
-        w_sec   = w_sec_i % geo->sec_per_pg;
-        w_pl    = w_sec_i / geo->sec_per_pg;
-
-        /* Set old ppa list */
-        old_ppa = &ppa_list[w_pg][geo->sec_per_pl_pg + w_sec_i];
-        old_ppa->ppa   = blk_md->ppa.ppa;
-        old_ppa->g.pg  = pg_i;
-        old_ppa->g.pl  = pl;
-        old_ppa->g.sec = sec;
-
-        /* Move sector data and oob to write position */
-        io   = (struct app_io_data *) gc_buf[tid][pg_i];
-        data = io->pl_vec[pl] + (sec * geo->sec_size);
-        oob  = io->oob_vec[sec_i];
-
-        w_io   = (struct app_io_data *) gc_buf[tid][w_pg];
-        w_oob  = w_io->mod_oob + (geo->sec_oob_sz * geo->sec_per_pg * w_pl);
-
-        if (data != w_io->sec_vec[w_pl][w_sec]) {
-            w_io->sec_vec[w_pl][w_sec]           = data;
-            w_io->sec_vec[w_pl][geo->sec_per_pg] = w_oob;
-            w_io->oob_vec[w_sec_i]               = oob;
-            memcpy (w_oob + (geo->sec_oob_sz * w_sec), oob, geo->sec_oob_sz);
-        }
-
-        return ++w_ppa_off;
-    }
-
-    return w_ppa_off;
-}
-
-static uint32_t gc_move_mapping_pgs (struct app_channel *lch,
-        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
-        uint16_t tid, uint32_t w_ppa_off, uint16_t *map_pgs, uint32_t npgs)
-{
-    uint32_t pl_i, w_pg, pg_i, sec_i, last_off = 0;
-    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
-    struct app_io_data *io, *w_io;
-
-    w_pg = w_ppa_off / geo->sec_per_pl_pg;
-
-    if (w_ppa_off % geo->sec_per_pl_pg != 0) {
-
-        io   = (struct app_io_data *) gc_buf[tid][w_pg];
-        w_io = (struct app_io_data *) gc_buf[tid][w_pg + npgs];
-
-        for (pl_i = 0; pl_i < geo->n_of_planes; pl_i++) {
-            memcpy (w_io->sec_vec[pl_i], io->sec_vec[pl_i],
-                                    sizeof (uint8_t *) * geo->sec_per_pg + 1);
-            memcpy (w_io->oob_vec, io->oob_vec,
-                                    sizeof (uint8_t *) * geo->sec_per_pl_pg);
-        }
-
-        memcpy (w_io->mod_oob, io->mod_oob, geo->pg_oob_sz);
-        memcpy (ppa_list[w_pg + npgs], ppa_list[w_pg],
-                           sizeof (struct nvm_ppa_addr) * geo->sec_per_pl_pg);
-
-        last_off = w_ppa_off % geo->sec_per_pl_pg;
-        w_ppa_off -= last_off;
-    }
-
-    for (pg_i = 0; pg_i < npgs; pg_i++) {
-        for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++)
-            w_ppa_off = gc_move_single_sector (lch, blk_md, ppa_list, tid,
-                                              map_pgs[pg_i], sec_i, w_ppa_off);
-    }
-
-    return w_ppa_off + last_off;
-}
-
-static int gc_move_buf_sectors (struct app_channel *lch,
-        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
-        uint16_t tid)
-{
-    uint32_t pg_i, sec_i;
-    uint32_t ppa_off = 0, map_i = 0;
-
-    struct app_io_data *io;
-    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
-    struct app_pg_oob *pg_oob;
-    uint16_t map_pgs[geo->pg_per_blk];
-
-    memset (map_pgs, 0, sizeof (uint16_t) * geo->pg_per_blk);
-
-    for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++) {
-        if (gc_check_valid_pg (lch, blk_md, pg_i)) {
-
-            /* Buffer mapping table pages to keep page alignment */
-            io = (struct app_io_data *) gc_buf[tid][pg_i];
-            pg_oob = (struct app_pg_oob *) io->oob_vec[0];
-            if (pg_oob->pg_type == APP_PG_MAP) {
-                map_pgs[map_i] = pg_i;
-                map_i++;
-                continue;
-            }
-
-            for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++)
-                ppa_off = gc_move_single_sector
-                            (lch, blk_md, ppa_list, tid, pg_i, sec_i, ppa_off);
-        }
-    }
-
-    if (map_i)
-        ppa_off = gc_move_mapping_pgs
-                         (lch, blk_md, ppa_list, tid, ppa_off, map_pgs, map_i);
-
-    return ppa_off;
-}
-
-static int gc_write_blk (struct app_channel *lch, struct app_blk_md_entry *md,
-                                  struct nvm_ppa_addr **ppa_list, uint16_t tid)
-{
-    uint32_t sec_i, pg_i, npgs, valid_sec = 0;
-    struct nvm_mmgr_geometry *geo =  lch->ch->geometry;
-    struct app_io_data *io;
-
-    for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++)
-        for (sec_i = 0; sec_i < geo->sec_per_pl_pg * 2; sec_i++)
-            ppa_list[pg_i][sec_i].ppa = 0x0;
-
-    valid_sec = gc_move_buf_sectors (lch, md, ppa_list, tid);
-
-    npgs = valid_sec / geo->sec_per_pl_pg;
-    if (valid_sec % geo->sec_per_pl_pg != 0)
-        npgs++;
-
-    for (pg_i = 0; pg_i < npgs; pg_i++) {
-
-        /* Write page to the same channel to keep the parallelism */
-        if (appnvm()->ch_prov.get_ppas_fn (lch, ppa_list[pg_i], 1)) {
-            ppa_list[pg_i][0].ppa = 0x0;
-            gc_invalidate_err_pgs (lch, ppa_list);
-            return -1;
-        }
-
-        /* Invalidate padded sectors in the last page */
-        if (pg_i == npgs - 1) {
-            for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++) {
-                if (!ppa_list[pg_i][geo->sec_per_pl_pg + sec_i].ppa) {
-                    appnvm()->md.invalidate_fn
-                             (lch, &ppa_list[pg_i][sec_i], APP_INVALID_SECTOR);
-                    ppa_list[pg_i][sec_i].ppa = 0x0;
-                }
+            oob = (struct app_pg_oob *) io->oob_vec[0];
+            if (oob->pg_type == APP_PG_MAP) {
+                if (gc_proc_mapping_pg (lch, io, &ppa, oob))
+                    return -1;
+                nsec += lch->ch->geometry->sec_per_pl_pg;
             }
         }
-
-        io = (struct app_io_data *) gc_buf[tid][pg_i];
-
-        if (app_pg_io (lch, MMGR_WRITE_SGL,
-                                       (void **) io->sec_vec, ppa_list[pg_i])) {
-
-            /* TODO: If write fails, tell provisioning to recycle
-             * current block and abort any write to the blocks,
-             * otherwise we loose the blk sequential writes guarantee */
-
-            gc_invalidate_err_pgs (lch, ppa_list);
-            return -1;
-        }
     }
 
-    return valid_sec;
+    return nsec;
 }
 
-static int gc_upsert_sector (struct app_channel *lch,
-        struct app_blk_md_entry *blk_md, struct nvm_ppa_addr *new_ppa,
-        struct nvm_ppa_addr *old_ppa, struct app_pg_oob *oob)
+static uint8_t gc_process_pg (struct app_channel *lch, struct app_io_data *io,
+                                                                uint16_t n_sec)
 {
-    uint8_t *pg_map;
-    struct nvm_ppa_addr read_ppa;
-    int ret = 0;
-
-    pg_map = &blk_md->pg_state[old_ppa->g.pg * lch->ch->geometry->n_of_planes];
-
-    if (!(pg_map[old_ppa->g.pl] & (1 << old_ppa->g.sec))) {
-
-        switch (oob->pg_type) {
-            case APP_PG_MAP:
-
-                if (new_ppa->g.sec == 0 && new_ppa->g.pl == 0)
-                    if (appnvm()->gl_map.upsert_md_fn (oob->lba, new_ppa->ppa,
-                                                                 old_ppa->ppa))
-                        goto INVALID;
-
-                return 0;
-
-            case APP_PG_NAMESPACE:
-
-                pthread_mutex_lock (&gc_ns_mutex);
-                read_ppa.ppa = appnvm()->gl_map.read_fn (oob->lba);
-
-                if (read_ppa.ppa != old_ppa->ppa) {
-                    pthread_mutex_unlock (&gc_ns_mutex);
-                    goto INVALID;
-                }
-
-                ret = appnvm()->gl_map.upsert_fn (oob->lba, new_ppa->ppa);
-                pthread_mutex_unlock (&gc_ns_mutex);
-
-                if (ret)
-                    goto INVALID;
-
-                old_ppa->ppa = read_ppa.ppa;
-
-                return 0;
-
-            case APP_PG_PADDING:
-                goto INVALID;
-
-            default:
-                log_info ("[gc: Unknown data type (%d). LBA %lu, PPA "
-                        "(%d/%d/%d/%d/%d/%d)\n", oob->pg_type, oob->lba,
-                        old_ppa->g.ch, old_ppa->g.lun, old_ppa->g.blk,
-                        old_ppa->g.pl, old_ppa->g.pg, old_ppa->g.sec);
-        }
-    }
-
-INVALID:
-    appnvm()->md.invalidate_fn (lch, new_ppa, APP_INVALID_SECTOR);
-    old_ppa->ppa = 0x0;
-    return ret;
-}
-
-static void gc_rollback_upserted_sectors (struct nvm_ppa_addr **ppa_list,
-                                                   uint32_t nsec, uint16_t tid)
-{
-    uint32_t sec, pg;
-    struct nvm_ppa_addr *old_ppa;
-    struct nvm_mmgr_geometry *geo = ch[0]->ch->geometry;
-    struct app_io_data *io;
     struct app_pg_oob *oob;
-
-    while (nsec) {
-        nsec--;
-        pg  = nsec / geo->sec_per_pl_pg;
-        sec = nsec % geo->sec_per_pl_pg;
-        old_ppa = &ppa_list[pg][geo->sec_per_pl_pg + sec];
-        io   = (struct app_io_data *) gc_buf[tid][pg];
-        oob  = (struct app_pg_oob *) io->oob_vec[sec];
-
-        if (old_ppa->ppa)
-            if (appnvm()->gl_map.upsert_fn (oob->lba, old_ppa->ppa))
-                log_err ("[gc: Failed to rollback upserted LBAs. "
-                            "LBA: %lu, old_ppa: %lx]", oob->lba, old_ppa->ppa);
-    }
-}
-
-static int gc_upsert_blk_map (struct app_channel *lch,
-            struct app_blk_md_entry *blk_md, struct nvm_ppa_addr **ppa_list,
-            uint32_t sectors, uint32_t tid)
-{
     struct nvm_mmgr_geometry *geo = lch->ch->geometry;
-    struct nvm_ppa_addr *new_ppa, *old_ppa;
-    struct app_io_data *io;
-    struct app_pg_oob *oob;
+    struct nvm_ppa_addr ppa_list[geo->sec_per_pl_pg];
+    uint16_t sec_i = 0, ret = 0;
 
-    uint32_t pg, sec, sec_i;
-    uint64_t lba;
+    /* Write page to the same channel to keep the parallelism */
+    if (appnvm()->ch_prov.get_ppas_fn (lch, ppa_list, 1))
+        return ret;
 
-    for (sec_i = 0; sec_i < sectors; sec_i++) {
-        pg  = sec_i / geo->sec_per_pl_pg;
-        sec = sec_i % geo->sec_per_pl_pg;
+    if (app_pg_io (lch, MMGR_WRITE_PG, (void **) io->pl_vec, ppa_list)) {
 
-        new_ppa = &ppa_list[pg][sec];
-        old_ppa = &ppa_list[pg][geo->sec_per_pl_pg + sec];
-        io   = (struct app_io_data *) gc_buf[tid][pg];
-        oob  = (struct app_pg_oob *) io->oob_vec[sec];
+        /* TODO: If write fails, tell provisioning to recycle
+         * current block and abort any write to the blocks,
+         * otherwise we loose the blk sequential writes guarantee */
 
-        lba = gc_upsert_sector (lch, blk_md, new_ppa, old_ppa, oob);
-        if (lba)
-            goto ROLLBACK;
+        goto INV_PG;
     }
+
+    for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++) {
+
+        /* Invalidate padded sectors */
+        if (sec_i >= n_sec) {
+            appnvm()->md.invalidate_fn
+                                   (lch, &ppa_list[sec_i], APP_INVALID_SECTOR);
+            continue;
+        }
+
+        oob = (struct app_pg_oob *) io->oob_vec[sec_i];
+        if (appnvm()->gl_map.upsert_fn (oob->lba, ppa_list[sec_i].ppa)) {
+            appnvm()->md.invalidate_fn
+                                   (lch, &ppa_list[sec_i], APP_INVALID_SECTOR);
+            continue;
+        }
+        ret++;
+    }
+
+    return ret;
+
+INV_PG:
+    appnvm()->md.invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
+    return 0;
+}
+
+static int gc_move_sector (struct app_channel *lch, struct app_io_data *w_io,
+        struct nvm_ppa_addr *old_ppa, uint32_t pg_i, uint32_t sec_i,
+        uint32_t ppa_off, uint16_t tid)
+{
+    uint32_t w_pl, w_sec;
+    uint8_t *data, *w_data, *oob, *w_oob;
+    struct app_io_data *io;
+    struct app_pg_oob *sec_oob;
+    struct nvm_mmgr_geometry *geo = lch->ch->geometry;
+
+    io = (struct app_io_data *) gc_buf[tid][pg_i];
+    sec_oob = (struct app_pg_oob *) io->oob_vec[sec_i];
+
+    switch (sec_oob->pg_type) {
+        case APP_PG_NAMESPACE:
+            break;
+        case APP_PG_PADDING:
+            appnvm()->md.invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
+            return -1;
+        case APP_PG_MAP:
+        case APP_PG_RESERVED:
+        default:
+            goto ERR;
+    }
+
+    w_pl  = ppa_off / geo->sec_per_pg;
+    w_sec = ppa_off % geo->sec_per_pg;
+
+    /* Move sector data and oob to write position */
+    data = io->sec_vec[sec_i / geo->sec_per_pg][sec_i % geo->sec_per_pg];
+    oob  = io->oob_vec[sec_i];
+
+    w_data = w_io->sec_vec[w_pl][w_sec];
+    w_oob  = w_io->oob_vec[ppa_off];
+
+    memcpy (w_data, data, geo->sec_size);
+    memcpy (w_oob, oob, geo->sec_oob_sz);
 
     return 0;
 
-ROLLBACK:
-    gc_rollback_upserted_sectors (ppa_list, sec_i, tid);
+ERR:
+    log_info ("[gc: Suspicious data type (%d). LBA %lu, PPA "
+            "(%d/%d/%d/%d/%d/%d)\n", sec_oob->pg_type, sec_oob->lba,
+            old_ppa->g.ch, old_ppa->g.lun, old_ppa->g.blk,
+            old_ppa->g.pl, old_ppa->g.pg, old_ppa->g.sec);
+            appnvm()->md.invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
     return -1;
 }
 
-static int gc_recycle_blks (struct app_blk_md_entry **list, uint32_t count,
-                                                uint16_t tid, uint32_t *ch_sec)
+static int gc_process_blk (struct app_channel *lch, struct app_blk_md_entry *md,
+                                  uint16_t tid, uint32_t *failed)
 {
-    int blk_sec;
-    uint32_t blk_i, pg_i, recycled = 0, count_sec = 0;
-    struct app_channel *lch;
-    struct nvm_mmgr_geometry *geo = ch[0]->ch->geometry;
+    uint32_t pg_i, sec_i, pl, sec, ppa_off;
+    uint8_t *pg_map;
+    struct app_io_data *w_io;
+    struct app_pg_oob *sec_oob;
+    struct nvm_ppa_addr old_ppa;
+    struct nvm_mmgr_geometry *geo = lch->ch->geometry;
+    uint8_t nsec, failed_sec = 0, sec_ok = 0;
 
-    /* This list is used to store the old and new PPA of collected sectors */
-    struct nvm_ppa_addr *ppa_list[geo->pg_per_blk];
+    w_io = app_alloc_pg_io (lch);
+    if (!w_io)
+        return -1;
 
+    ppa_off = 0;
     for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++) {
-        ppa_list[pg_i] = malloc (sizeof (struct nvm_ppa_addr)
-                                                     * geo->sec_per_pl_pg * 2);
-        if (!ppa_list[pg_i])
-            goto FREE_PPA;
+
+        if (gc_check_valid_pg (lch, md, pg_i)) {
+
+            pg_map = &md->pg_state[pg_i * geo->n_of_planes];
+
+            for (sec_i = 0; sec_i < geo->sec_per_pl_pg; sec_i++) {
+
+                pl  = sec_i / geo->sec_per_pg;
+                sec = sec_i % geo->sec_per_pg;
+
+                if (!(pg_map[pl] & (1 << sec))) {
+
+                    old_ppa.ppa   = 0x0;
+                    old_ppa.ppa   = md->ppa.ppa;
+                    old_ppa.g.pg  = pg_i;
+                    old_ppa.g.pl  = pl;
+                    old_ppa.g.sec = sec;
+
+                    if (gc_move_sector
+                              (lch, w_io, &old_ppa, pg_i, sec_i, ppa_off, tid))
+                        continue;
+
+                    ppa_off++;
+
+                    if (ppa_off == geo->sec_per_pl_pg) {
+                        nsec = gc_process_pg (lch, w_io, ppa_off);
+                        failed_sec += ppa_off - nsec;
+                        sec_ok += nsec;
+                        ppa_off = 0;
+                    }
+                }
+            }
+        }
     }
 
-    for (blk_i = 0; blk_i < count; blk_i++) {
-        lch = ch[list[blk_i]->ppa.g.ch];
+    if (ppa_off) {
+        for (sec_i = ppa_off; sec_i < geo->sec_per_pl_pg; sec_i++) {
+            sec_oob  = (struct app_pg_oob *) w_io->oob_vec[sec_i];
+            sec_oob->lba = 0;
+            sec_oob->pg_type = APP_PG_PADDING;
+        }
 
-        for (pg_i = 0; pg_i < geo->pg_per_blk; pg_i++)
-            app_pg_io_prepare (lch, gc_buf[tid][pg_i]);
+        nsec = gc_process_pg (lch, w_io, ppa_off);
+        failed_sec += ppa_off - nsec;
+        sec_ok += nsec;
+    }
+
+    app_free_pg_io (w_io);
+    *failed = failed_sec;
+
+    return sec_ok;
+}
+
+static int gc_recycle_blks (struct app_channel *lch,
+                            struct app_blk_md_entry **list, uint32_t count,
+                            uint16_t tid, uint32_t *ch_sec)
+{
+    int blk_sec;
+    uint32_t blk_i, recycled = 0, count_sec = 0, failed_sec;
+
+    for (blk_i = 0; blk_i < count; blk_i++) {
 
         /* Read all valid pages in the blk from NVM to the buffer */
-        if (gc_read_blk (lch, list[blk_i], tid)) {
-            log_err ("[appnvm (gc): Read block failed.]");
-            continue;
-        }
-
-        /* Write all valid sectors from the buffer to new NVM PPAs */
-        blk_sec = gc_write_blk (lch, list[blk_i], ppa_list, tid);
+        /* Also move mapping table pages separately */
+        blk_sec = gc_read_blk (lch, list[blk_i], tid);
         if (blk_sec < 0) {
-            log_err ("[appnvm (gc): Write block failed.]");
+            log_err ("[appnvm (gc): Read block / move mapping failed.]");
+            continue;
+        }
+        moved_sec += blk_sec;
+        count_sec += blk_sec;
+
+        blk_sec = gc_process_blk (lch, list[blk_i], tid, &failed_sec);
+        if (blk_sec < 0) {
+            log_err ("[appnvm (gc): Process block failed.]");
             continue;
         }
 
-        /* Upsert all valid sectors in the mapping table */
-        if (gc_upsert_blk_map (lch, list[blk_i], ppa_list, blk_sec, tid)) {
-            log_err ("[appnvm (gc): Mapping upsert failed.]");
-            gc_invalidate_err_pgs (lch, ppa_list);
-            continue;
-        }
-
-        /* Put the block back in the channel provisioning */
-        if (appnvm()->ch_prov.put_blk_fn (lch, list[blk_i]->ppa.g.lun,
+        if (!failed_sec) {
+            /* Put the block back in the channel provisioning */
+            if (appnvm()->ch_prov.put_blk_fn (lch, list[blk_i]->ppa.g.lun,
                                                      list[blk_i]->ppa.g.blk)) {
-            log_err ("[appnvm (gc): Put block failed.]");
-            gc_rollback_upserted_sectors (ppa_list, blk_sec, tid);
-            gc_invalidate_err_pgs (lch, ppa_list);
-            continue;
+                log_err ("[appnvm (gc): Put block failed (%d/%d/%d)]",
+                        list[blk_i]->ppa.g.ch, list[blk_i]->ppa.g.lun,
+                        list[blk_i]->ppa.g.blk);
+                goto COUNT;
+            }
+            recycled++;
+            recycled_blks++;
         }
 
-        recycled++;
-        recycled_blks++;
+COUNT:
         moved_sec += blk_sec;
         count_sec += blk_sec;
     }
 
-FREE_PPA:
-    while (pg_i) {
-        pg_i--;
-        free (ppa_list[pg_i]);
-    }
     *ch_sec = count_sec;
     return recycled;
 }
@@ -610,8 +478,10 @@ static void *gc_run_ch (void *arg)
                     break;
                 }
 
-                recycled = gc_recycle_blks (list, victims,
+                recycled = gc_recycle_blks (lch, list, victims,
                                                       th_arg->bufid, &blk_sec);
+                free (list);
+
                 if (recycled != victims)
                     log_info ("[appnvm (gc): %d recycled, %d with errors.]",
                                                  recycled, victims - recycled);

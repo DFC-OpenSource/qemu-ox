@@ -29,6 +29,9 @@
 #include <string.h>
 #include "hw/block/ox-ctrl/include/ssd.h"
 
+extern uint16_t app_nch;
+uint8_t         map_new;
+
 static int ch_map_create (struct app_channel *lch)
 {
     int i;
@@ -38,8 +41,10 @@ static int ch_map_create (struct app_channel *lch)
     for (i = 0; i < md->entries; i++) {
         ent = ((struct app_map_entry *) md->tbl) + i;
         memset (ent, 0x0, sizeof (struct app_map_entry));
-        ent->lba = (md->entries * lch->app_ch_id) + i;
+        ent->lba = (i * app_nch) + lch->app_ch_id;
     }
+
+    map_new = 1;
 
     return 0;
 }
@@ -168,4 +173,6 @@ void ch_map_register (void) {
     appnvm()->ch_map.load_fn = ch_map_load;
     appnvm()->ch_map.flush_fn = ch_map_flush;
     appnvm()->ch_map.get_fn = ch_map_get;
+
+    map_new = 0;
 }

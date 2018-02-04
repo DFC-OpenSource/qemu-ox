@@ -322,7 +322,7 @@ static void ch_prov_check_gc (struct app_channel *lch)
 
     /* If the channel runs out of blocks, disable channel and leave
                                                     last blocks for GC usage*/
-    if (free_blk < APPNVM_GC_MIN_FREE_CH_BLKS)
+    if (free_blk < APPNVM_GC_MIN_FREE_BLKS)
         appnvm_ch_active_unset (lch);
 
     if (free_blk / tot_blk < APPNVM_GC_THRESD)
