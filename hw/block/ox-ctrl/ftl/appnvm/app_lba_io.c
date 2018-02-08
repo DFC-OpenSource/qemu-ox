@@ -62,7 +62,8 @@ struct lba_io_sec_ent {
     struct app_prov_ppas *prov;
 };
 
-#define LBA_IO_ENTRIES      512
+#define LBA_IO_PPA_ENTRIES  256
+#define LBA_IO_LBA_ENTRIES  256 * 64
 #define LBA_IO_WRITE_Q      0
 #define LBA_IO_READ_Q       1
 #define LBA_IO_QUEUE_TO     2000000
@@ -671,7 +672,7 @@ ERR_TIMEOUT:
 struct ox_mq_config lba_io_mq_config = {
     /* Queue 0: write, queue 1: read */
     .n_queues   = 2,
-    .q_size     = 128 * 256,
+    .q_size     = LBA_IO_LBA_ENTRIES,
     .sq_fn      = lba_io_sec_sq,
     .cq_fn      = lba_io_sec_callback,
     .to_fn      = lba_io_mq_to,
@@ -729,7 +730,7 @@ static int lba_io_init (void)
     if (pthread_spin_init(&sec_spin, 0))
         goto CMD_SPIN;
 
-    for (cmd_i = 0; cmd_i < LBA_IO_ENTRIES; cmd_i++) {
+    for (cmd_i = 0; cmd_i < LBA_IO_PPA_ENTRIES; cmd_i++) {
         cmd = calloc (sizeof (struct lba_io_cmd), 1);
         if (!cmd)
             goto FREE_CMD;

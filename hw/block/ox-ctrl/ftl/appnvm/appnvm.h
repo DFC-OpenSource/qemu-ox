@@ -50,7 +50,7 @@
 #define APPNVM_GC_THRESD            0.75
 #define APPNVM_GC_TARGET_RATE       0.9
 #define APPNVM_GC_MAX_BLKS          25
-#define APPNVM_GC_MIN_FREE_BLKS     16
+#define APPNVM_GC_MIN_FREE_BLKS     8
 #define APPNVM_GC_OVERPROV          0.25
 
 #define APPNVM_DEBUG_CH_PROV    0
