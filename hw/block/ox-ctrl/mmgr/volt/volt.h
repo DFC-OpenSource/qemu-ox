@@ -32,7 +32,7 @@
 #define VOLT_WRITE_TIME     200
 #define VOLT_ERASE_TIME     1200
 
-#define VOLT_QUEUE_SIZE     256
+#define VOLT_QUEUE_SIZE     2048
 #define VOLT_QUEUE_TO       48000
 
 typedef struct VoltStatus {

@@ -444,7 +444,7 @@ int nvm_submit_ftl (struct nvm_io_cmd *cmd)
 
         if (ret) {
             retry--;
-            usleep (1000);
+            usleep (NVM_QUEUE_RETRY_SLEEP);
         }
         else if (core.debug) {
             printf(" CMD cid: %lu, type: 0x%x submitted to FTL. "

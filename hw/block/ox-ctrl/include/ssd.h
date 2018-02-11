@@ -52,10 +52,10 @@
         OBJECT_CHECK(QemuOxCtrl, (obj), TYPE_OX)
 
 #define MAX_NAME_SIZE           31
-#define NVM_QUEUE_RETRY         32
-#define NVM_QUEUE_RETRY_SLEEP   5000
-#define NVM_FTL_QUEUE_SIZE      256
-#define NVM_FTL_QUEUE_TO        2000000
+#define NVM_QUEUE_RETRY         1024
+#define NVM_QUEUE_RETRY_SLEEP   1000
+#define NVM_FTL_QUEUE_SIZE      512
+#define NVM_FTL_QUEUE_TO        4000000
 
 #define NVM_SYNCIO_TO          10
 #define NVM_SYNCIO_FLAG_BUF    0x1

@@ -62,11 +62,11 @@ struct lba_io_sec_ent {
     struct app_prov_ppas *prov;
 };
 
-#define LBA_IO_PPA_ENTRIES  256
-#define LBA_IO_LBA_ENTRIES  256 * 64
+#define LBA_IO_PPA_ENTRIES  512
+#define LBA_IO_LBA_ENTRIES  512 * 64
 #define LBA_IO_WRITE_Q      0
 #define LBA_IO_READ_Q       1
-#define LBA_IO_QUEUE_TO     2000000
+#define LBA_IO_QUEUE_TO     4000000
 #define LBA_IO_PPA_SIZE     64
 #define LBA_IO_RETRY        4
 #define LBA_IO_RETRY_DELAY  250000
@@ -564,7 +564,8 @@ RETRY:
 
 RESET_LINE:
     rw_off[lba->type] = 0;
-    memset (rw_line[lba->type], 0x0, sizeof (struct lba_io_sec *) * 64);
+    memset (rw_line[lba->type], 0x0, sizeof (struct lba_io_sec *)
+                                                            * LBA_IO_PPA_SIZE);
 }
 
 static void lba_io_upsert_map (struct nvm_io_cmd *cmd)
@@ -671,6 +672,7 @@ ERR_TIMEOUT:
 
 struct ox_mq_config lba_io_mq_config = {
     /* Queue 0: write, queue 1: read */
+    .name       = "LBA_IO",
     .n_queues   = 2,
     .q_size     = LBA_IO_LBA_ENTRIES,
     .sq_fn      = lba_io_sec_sq,

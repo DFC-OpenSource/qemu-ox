@@ -24,7 +24,12 @@ int ox_mq_get_status (struct ox_mq *mq, struct ox_mq_stats *st, uint16_t qid)
 
 int ox_mq_used_count (struct ox_mq *mq, uint16_t qid)
 {
-    if (!mq || qid > mq->config->n_queues)
+    if (!mq || !mq->config) {
+        log_err (" [ox-mq (used_count): WARNING: Suspicious null pointer]");
+        return -1;
+    }
+
+    if (qid > mq->config->n_queues)
         return -1;
 
     return u_atomic_read(&mq->queues[qid].stats.sq_used);
@@ -260,23 +265,23 @@ static void ox_mq_free_queues (struct ox_mq *mq, uint32_t n_queues)
 #define OX_MQ_ENQUEUE(head, elm, mutex, stat) do {                  \
         pthread_mutex_lock((mutex));                                \
         TAILQ_INSERT_TAIL((head), (elm), entry);                    \
-        pthread_mutex_unlock((mutex));                              \
         u_atomic_inc((stat));                                       \
+        pthread_mutex_unlock((mutex));                              \
 } while (/*CONSTCOND*/0)
 
 #define OX_MQ_DEQUEUE_H(head, elm, mutex, stats) do {               \
         pthread_mutex_lock((mutex));                                \
         (elm) = TAILQ_FIRST((head));                                \
         TAILQ_REMOVE ((head), (elm), entry);                        \
-        pthread_mutex_unlock ((mutex));                             \
         u_atomic_dec((stats));                                      \
+        pthread_mutex_unlock ((mutex));                             \
 } while (/*CONSTCOND*/0)
 
 #define OX_MQ_DEQUEUE(head, elm, mutex, stats) do {                 \
         pthread_mutex_lock((mutex));                                \
         TAILQ_REMOVE ((head), (elm), entry);                        \
-        pthread_mutex_unlock ((mutex));                             \
         u_atomic_dec((stats));                                      \
+        pthread_mutex_unlock ((mutex));                             \
 } while (/*CONSTCOND*/0)
 
 static void *ox_mq_sq_thread (void *arg)
@@ -374,6 +379,11 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
     struct ox_mq_entry *req;
     uint8_t wake = 0;
 
+    if (!mq || !mq->config) {
+        log_err (" [ox-mq (submission): WARNING: Suspicious null pointer]");
+        return -1;
+    }
+
     if (qid >= mq->config->n_queues)
         return -1;
 
@@ -388,8 +398,8 @@ int ox_mq_submit_req (struct ox_mq *mq, uint32_t qid, void *opaque)
 
     req = TAILQ_FIRST (&q->sq_free);
     TAILQ_REMOVE (&q->sq_free, req, entry);
-    pthread_mutex_unlock (&q->sq_free_mutex);
     u_atomic_dec(&q->stats.sq_free);
+    pthread_mutex_unlock (&q->sq_free_mutex);
 
     req->opaque = opaque;
     req->qid = qid;
@@ -419,6 +429,11 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     struct ox_mq_entry *req_cq;
     uint8_t wake = 0;
 
+    if (!mq || !mq->config) {
+        log_err (" [ox-mq (completion): WARNING: Suspicious null pointer]");
+        return -1;
+    }
+
     pthread_mutex_lock (&req_sq->entry_mutex);
     /* Timeout requests are OX_MQ_TIMEOUT_BACK after the first completion try */
     if (!req_sq || !req_sq->opaque || req_sq->status == OX_MQ_TIMEOUT_BACK) {
@@ -442,14 +457,15 @@ int ox_mq_complete_req (struct ox_mq *mq, struct ox_mq_entry *req_sq)
     pthread_mutex_lock (&q->cq_free_mutex);
     if (TAILQ_EMPTY (&q->cq_free)) {
         pthread_mutex_unlock (&q->cq_free_mutex);
-        log_info (" [ox-mq: WARNING: CQ Full, request not completed.\n");
+        log_info (" [ox-mq (%s): WARNING: CQ Full, request not completed.]\n",
+                                                              mq->config->name);
         return -1;
     }
 
     req_cq = TAILQ_FIRST (&q->cq_free);
     TAILQ_REMOVE (&q->cq_free, req_cq, entry);
-    pthread_mutex_unlock (&q->cq_free_mutex);
     u_atomic_dec(&q->stats.cq_free);
+    pthread_mutex_unlock (&q->cq_free_mutex);
 
     pthread_mutex_lock (&req_sq->entry_mutex);
     req_cq->opaque = req_sq->opaque;
@@ -503,8 +519,10 @@ static int ox_mq_process_to_entry (struct ox_mq *mq, struct ox_mq_queue *q,
                                                       struct ox_mq_entry *req) {
     struct ox_mq_entry *new_req;
 
+    pthread_mutex_lock (&q->sq_wait_mutex);
     TAILQ_REMOVE (&q->sq_wait, req, entry);
     u_atomic_dec(&q->stats.sq_wait);
+    pthread_mutex_unlock (&q->sq_wait_mutex);
 
     req->status = OX_MQ_TIMEOUT;
 
@@ -568,8 +586,8 @@ static void ox_mq_check_queue_to (struct ox_mq *mq, struct ox_mq_queue *q)
         i--;
         if (mq->config->to_fn && (mq->config->flags & OX_MQ_TO_COMPLETE))
             if (ox_mq_complete_req(mq, to_list[i]))
-                log_err (" [ox-mq: WARNING: Not possible to post completion "
-                                                      "for a timeout request");
+                log_err (" [ox-mq (%s): WARNING: Not possible to post "
+                        "completion for a timeout request]", mq->config->name);
         to_list[i]->status = OX_MQ_TIMEOUT_COMPLETED;
     }
 
@@ -682,8 +700,8 @@ struct ox_mq *ox_mq_init (struct ox_mq_config *config)
     LIST_INSERT_HEAD(&mq_head, mq, entry);
     mq_count++;
 
-    log_info (" [ox-mq: Multi queue started (nq: %d, qs: %d)]\n",
-                                             config->n_queues, config->q_size);
+    log_info (" [ox-mq (%s): Multi queue started (nq: %d, qs: %d)]\n",
+                           mq->config->name, config->n_queues, config->q_size);
     return mq;
 
 FREE_ALL:
@@ -721,9 +739,9 @@ void ox_mq_destroy (struct ox_mq *mq)
     LIST_REMOVE(mq, entry);
     mq_count--;
 
+    log_info (" [ox-mq (%s): Multi queue stopped]\n", mq->config->name);
+
     free (mq->queues);
     free (mq->config);
     free (mq);
-
-    log_info (" [ox-mq: Multi queue stopped]\n");
 }
