@@ -96,15 +96,15 @@ static int app_init_bbt (struct app_channel *lch)
     bbt->magic = 0;
     bbt->bb_sz = tblks;
 
-    ret = appnvm()->bbt.load_fn (lch);
+    ret = appnvm()->bbt->load_fn (lch);
     if (ret) goto ERR;
 
     /* create and flush bad block table if it does not exist */
     /* this procedure will erase the entire device (only in test mode) */
     if (bbt->magic == APP_MAGIC) {
-        ret = appnvm()->bbt.create_fn (lch, APP_BBT_EMERGENCY);
+        ret = appnvm()->bbt->create_fn (lch, APP_BBT_EMERGENCY);
         if (ret) goto ERR;
-        ret = appnvm()->bbt.flush_fn (lch);
+        ret = appnvm()->bbt->flush_fn (lch);
         if (ret) goto ERR;
     }
 
@@ -152,14 +152,14 @@ static int app_init_blk_md (struct app_channel *lch)
     md->magic = 0;
     md->entries = tblks;
 
-    ret = appnvm()->md.load_fn (lch);
+    ret = appnvm()->md->load_fn (lch);
     if (ret) goto ERR;
 
     /* create and flush block metadata table if it does not exist */
     if (md->magic == APP_MAGIC) {
-        ret = appnvm()->md.create_fn (lch);
+        ret = appnvm()->md->create_fn (lch);
         if (ret) goto ERR;
-        ret = appnvm()->md.flush_fn (lch);
+        ret = appnvm()->md->flush_fn (lch);
         if (ret) goto ERR;
     }
 
@@ -212,14 +212,14 @@ static int app_init_map (struct app_channel *lch)
     md->magic = 0;
     md->entries = ch_map_md_ent;
 
-    ret = appnvm()->ch_map.load_fn (lch);
+    ret = appnvm()->ch_map->load_fn (lch);
     if (ret) goto FREE_TBL;
 
     /* create and flush mapping metadata table if it does not exist */
     if (md->magic == APP_MAGIC) {
-        ret = appnvm()->ch_map.create_fn (lch);
+        ret = appnvm()->ch_map->create_fn (lch);
         if (ret) goto FREE_TBL;
-        ret = appnvm()->ch_map.flush_fn (lch);
+        ret = appnvm()->ch_map->flush_fn (lch);
         if (ret) goto FREE_TBL;
     }
 
@@ -308,7 +308,7 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
     if (app_init_blk_md (lch))
         goto FREE_BBT;
 
-    if (appnvm()->ch_prov.init_fn (lch))
+    if (appnvm()->ch_prov->init_fn (lch))
         goto FREE_BLK_MD;
 
     if (app_init_map (lch))
@@ -324,7 +324,7 @@ static int channels_init (struct nvm_channel *ch, uint16_t id)
     return 0;
 
 EXIT_CH_PROV:
-    appnvm()->ch_prov.exit_fn (lch);
+    appnvm()->ch_prov->exit_fn (lch);
 FREE_BLK_MD:
     app_exit_blk_md (lch);
 FREE_BBT:
@@ -350,7 +350,7 @@ static void channels_exit (struct app_channel *lch)
     retry = 0;
     do {
         retry++;
-        ret = appnvm()->ch_map.flush_fn (lch);
+        ret = appnvm()->ch_map->flush_fn (lch);
     } while (ret && retry < APPNVM_FLUSH_RETRY);
 
     /* TODO: Recover from last checkpoint (make a checkpoint) */
@@ -364,7 +364,7 @@ static void channels_exit (struct app_channel *lch)
     retry = 0;
     do {
         retry++;
-        ret = appnvm()->md.flush_fn (lch);
+        ret = appnvm()->md->flush_fn (lch);
     } while (ret && retry < APPNVM_FLUSH_RETRY);
 
     /* TODO: Recover from last checkpoint (make a checkpoint) */
@@ -376,7 +376,7 @@ static void channels_exit (struct app_channel *lch)
                                           "Channel %d]", lch->ch->ch_id);
 
     app_exit_map (lch);
-    appnvm()->ch_prov.exit_fn (lch);
+    appnvm()->ch_prov->exit_fn (lch);
     app_exit_blk_md (lch);
     app_exit_bbt (lch);
 

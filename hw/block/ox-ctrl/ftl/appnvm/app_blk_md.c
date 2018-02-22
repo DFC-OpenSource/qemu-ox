@@ -184,7 +184,7 @@ static void blk_md_invalidate (struct app_channel *lch,
 
     off = (1 << g->sec_per_pg) - 1;
 
-    lun = appnvm()->md.get_fn (lch, ppa->g.lun);
+    lun = appnvm()->md->get_fn (lch, ppa->g.lun);
     pg_map = &lun[ppa->g.blk].pg_state[ppa->g.pg * g->n_of_planes];
 
     pthread_spin_lock (&md_ch_spin[ppa->g.ch]);
@@ -202,10 +202,15 @@ static void blk_md_invalidate (struct app_channel *lch,
     pthread_spin_unlock (&md_ch_spin[ppa->g.ch]);
 }
 
+static struct app_global_md appftl_md = {
+    .mod_id         = APPFTL_BLK_MD,
+    .create_fn      = blk_md_create,
+    .flush_fn       = blk_md_flush,
+    .load_fn        = blk_md_load,
+    .get_fn         = blk_md_get,
+    .invalidate_fn  = blk_md_invalidate
+};
+
 void blk_md_register (void) {
-    appnvm()->md.create_fn      = blk_md_create;
-    appnvm()->md.flush_fn       = blk_md_flush;
-    appnvm()->md.load_fn        = blk_md_load;
-    appnvm()->md.get_fn         = blk_md_get;
-    appnvm()->md.invalidate_fn  = blk_md_invalidate;
+    appnvm_mod_register (APPMOD_BLK_MD, APPFTL_BLK_MD, &appftl_md);
 }

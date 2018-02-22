@@ -329,12 +329,12 @@ int app_io_rsv_blk (struct app_channel *lch, uint8_t cmdtype,
 
 static void app_callback_io (struct nvm_mmgr_io_cmd *cmd)
 {
-    appnvm()->ppa_io.callback_fn (cmd);
+    appnvm()->ppa_io->callback_fn (cmd);
 }
 
 static int app_submit_io (struct nvm_io_cmd *cmd)
 {
-    return appnvm()->lba_io.submit_fn (cmd);
+    return appnvm()->lba_io->submit_fn (cmd);
 }
 
 static int app_init_channel (struct nvm_channel *ch)
@@ -387,7 +387,7 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
     lch->bbtbl->tbl[l_addr + (ppa->g.blk * n_pl + ppa->g.pl)] = value;
 
     if (flush) {
-        ret = appnvm()->bbt.flush_fn(lch);
+        ret = appnvm()->bbt->flush_fn(lch);
         if (ret)
             log_info("[ftl WARNING: Error flushing bad block table to NVM!]");
     }
@@ -424,17 +424,17 @@ static int app_global_init (void)
     if (!app_nch)
         return 0;
 
-    if (appnvm()->gl_prov.init_fn ()) {
+    if (appnvm()->gl_prov->init_fn ()) {
         log_err ("[appnvm: Global Provisioning NOT started.\n");
         return -1;
     }
 
-    if (appnvm()->gl_map.init_fn ()) {
+    if (appnvm()->gl_map->init_fn ()) {
         log_err ("[appnvm: Global Mapping NOT started.\n");
         goto EXIT_GL_PROV;
     }
 
-    if (appnvm()->lba_io.init_fn ()) {
+    if (appnvm()->lba_io->init_fn ()) {
         log_err ("[appnvm: LBA I/O NOT started.\n");
         goto EXIT_GL_MAP;
     }
@@ -442,7 +442,7 @@ static int app_global_init (void)
     if (pthread_mutex_init (&gc_ns_mutex, NULL))
         goto EXIT_LBA_IO;
 
-    if (appnvm()->gc.init_fn ()) {
+    if (appnvm()->gc->init_fn ()) {
         log_err ("[appnvm: GC NOT started.\n");
         goto NS_MUTEX;
     }
@@ -455,21 +455,21 @@ static int app_global_init (void)
 NS_MUTEX:
     pthread_mutex_destroy (&gc_ns_mutex);
 EXIT_LBA_IO:
-    appnvm()->lba_io.exit_fn ();
+    appnvm()->lba_io->exit_fn ();
 EXIT_GL_MAP:
-    appnvm()->gl_map.exit_fn ();
+    appnvm()->gl_map->exit_fn ();
 EXIT_GL_PROV:
-    appnvm()->gl_prov.exit_fn ();
+    appnvm()->gl_prov->exit_fn ();
     return -1;
 }
 
 static void app_global_exit (void)
 {
-    appnvm()->gc.exit_fn ();
+    appnvm()->gc->exit_fn ();
     pthread_mutex_destroy (&gc_ns_mutex);
-    appnvm()->lba_io.exit_fn ();
-    appnvm()->gl_map.exit_fn ();
-    appnvm()->gl_prov.exit_fn ();
+    appnvm()->lba_io->exit_fn ();
+    appnvm()->gl_map->exit_fn ();
+    appnvm()->gl_prov->exit_fn ();
 
     if (md_ch_spin)
         free ((void *)md_ch_spin);
@@ -499,6 +499,100 @@ static void app_exit_fn (uint16_t fn_id)
     }
 }
 
+int appnvm_mod_set (uint8_t *modset)
+{
+    int mod_i;
+    void *mod;
+
+    for (mod_i = 0; mod_i < APPNVM_MOD_COUNT; mod_i++)
+        if (modset[mod_i] >= APPNVM_FN_SLOTS)
+            return -1;
+
+    for (mod_i = 0; mod_i < APPNVM_MOD_COUNT; mod_i++) {
+
+        /* Set pointer if module ID is positive */
+        if (modset[mod_i]) {
+            mod = appnvm()->mod_list[mod_i][modset[mod_i]];
+            if (!mod)
+                continue;
+
+            switch (mod_i) {
+                case APPMOD_BBT:
+                    appnvm()->bbt = (struct app_global_bbt *) mod;
+                    break;
+                case APPMOD_BLK_MD:
+                    appnvm()->md = (struct app_global_md *) mod;
+                    break;
+                case APPMOD_CH_PROV:
+                    appnvm()->ch_prov = (struct app_ch_prov *) mod;
+                    break;
+                case APPMOD_GL_PROV:
+                    appnvm()->gl_prov = (struct app_gl_prov *) mod;
+                    break;
+                case APPMOD_CH_MAP:
+                    appnvm()->ch_map = (struct app_ch_map *) mod;
+                    break;
+                case APPMOD_GL_MAP:
+                    appnvm()->gl_map = (struct app_gl_map *) mod;
+                    break;
+                case APPMOD_PPA_IO:
+                    appnvm()->ppa_io = (struct app_ppa_io *) mod;
+                    break;
+                case APPMOD_LBA_IO:
+                    appnvm()->lba_io = (struct app_lba_io *) mod;
+                    break;
+                case APPMOD_GC:
+                    appnvm()->gc = (struct app_gc *) mod;
+                    break;
+            }
+
+            log_info ("  [appnvm: Module set. "
+                    "type: %d, id: %d, ptr: %p\n", mod_i, modset[mod_i], mod);
+        }
+    }
+    return 0;
+}
+
+int appnvm_mod_register (uint8_t modtype, uint8_t modid, void *mod)
+{
+    if (modid >= APPNVM_FN_SLOTS || modtype >= APPNVM_MOD_COUNT || !mod) {
+        log_err ("[appnvm (mod_register): Module NOT registered. "
+                           "type: %d, id: %d, ptr: %p\n", modtype, modid, mod);
+        return -1;
+    }
+
+    appnvm()->mod_list[modtype][modid] = mod;
+
+    log_info ("  [appnvm: Module registered. "
+                           "type: %d, id: %d, ptr: %p\n", modtype, modid, mod);
+
+    return 0;
+}
+
+static void ftl_appnvm_mod_probe (void)
+{
+    channels_register ();
+
+    /* Bad block table modules */
+    bbt_byte_register ();
+    /* Block meta-data modules */
+    blk_md_register ();
+    /* Channel provisioning modules */
+    ch_prov_register ();
+    /* Global provisioning modules */
+    gl_prov_register ();
+    /* Channel mapping modules */
+    ch_map_register ();
+    /* Global mapping modules */
+    gl_map_register ();
+    /* Back-end PPA I/O modules */
+    ppa_io_register ();
+    /* Front-end LBA I/O modules */
+    lba_io_register ();
+    /* Garbage collection modules */
+    gc_register ();
+}
+
 struct nvm_ftl_ops app_ops = {
     .init_ch     = app_init_channel,
     .submit_io   = app_submit_io,
@@ -520,26 +614,35 @@ struct nvm_ftl app_ftl = {
 
 int ftl_appnvm_init (void)
 {
+    /* This array should come from makefile or user defined configuration */
+    uint8_t modset_appftl[APPNVM_MOD_COUNT] = {
+        APPFTL_BBT,
+        APPFTL_BLK_MD,
+        APPFTL_CH_PROV,
+        APPFTL_GL_PROV,
+        APPFTL_CH_MAP,
+        APPFTL_GL_MAP,
+        APPFTL_PPA_IO,
+        APPFTL_LBA_IO,
+        APPFTL_GC
+    };
+
     gl_fn = 0;
     app_nch = 0;
     md_ch_spin = NULL;
 
-    /* AppNVM initialization */
-    channels_register ();
-    bbt_byte_register ();
-    blk_md_register ();
-    ch_prov_register ();
-    gl_prov_register ();
-    ch_map_register ();
-    gl_map_register ();
-    ppa_io_register ();
-    lba_io_register ();
-    gc_register ();
+    memset (appnvm()->mod_list, 0x0, sizeof (void *) *
+                                           APPNVM_FN_SLOTS * APPNVM_MOD_COUNT);
+
+    ftl_appnvm_mod_probe ();
+    if (appnvm_mod_set (modset_appftl))
+        return -1;
 
     app_ftl.cap |= 1 << FTL_CAP_GET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_SET_BBTBL;
     app_ftl.cap |= 1 << FTL_CAP_INIT_FN;
     app_ftl.cap |= 1 << FTL_CAP_EXIT_FN;
     app_ftl.bbtbl_format = FTL_BBTBL_BYTE;
+
     return nvm_register_ftl(&app_ftl);
 }

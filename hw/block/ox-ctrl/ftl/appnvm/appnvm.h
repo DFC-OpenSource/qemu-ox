@@ -28,6 +28,8 @@
 #include "hw/block/ox-ctrl/include/ssd.h"
 #include "hw/block/ox-ctrl/include/uatomic.h"
 
+/* ------- GENERAL USE ------- */
+
 #define APP_IO_RETRY       0
 
 #define APP_RSV_BBT_OFF    0
@@ -46,21 +48,6 @@
 #define APP_INVALID_SECTOR 0
 #define APP_INVALID_PAGE   1
 
-#define APPNVM_FLUSH_RETRY          3
-#define APPNVM_GC_THRESD            0.75
-#define APPNVM_GC_TARGET_RATE       0.9
-#define APPNVM_GC_MAX_BLKS          25
-#define APPNVM_GC_MIN_FREE_BLKS     8
-#define APPNVM_GC_OVERPROV          0.25
-
-#define APPNVM_DEBUG_CH_PROV    0
-#define APPNVM_DEBUG_GL_PROV    0
-#define APPNVM_DEBUG_GC         1
-
-enum app_functions {
-    APP_FN_GLOBAL   = 0
-};
-
 enum app_flags_ids {
     APP_FLAGS_ACT_CH   = 1,
     APP_FLAGS_CHECK_GC = 2
@@ -70,6 +57,23 @@ enum {
     FTL_PGMAP_OFF   = 0,
     FTL_PGMAP_ON    = 1
 };
+
+/* ------- FTL CONFIGURATION ------- */
+
+#define APPNVM_FLUSH_RETRY          3
+#define APPNVM_GC_THRESD            0.75
+#define APPNVM_GC_TARGET_RATE       0.9
+#define APPNVM_GC_MAX_BLKS          25
+#define APPNVM_GC_MIN_FREE_BLKS     8
+#define APPNVM_GC_OVERPROV          0.25
+
+/* ------- MODULARIZED DEBUG ------- */
+
+#define APPNVM_DEBUG_CH_PROV    0
+#define APPNVM_DEBUG_GL_PROV    0
+#define APPNVM_DEBUG_GC         1
+
+/* ------- APPNVM FTL RELATED ------- */
 
 enum app_bbt_state {
     NVM_BBT_FREE = 0x0, // Block is free AKA good
@@ -84,6 +88,70 @@ enum app_bbt_state {
 #define APP_BBT_FULL        0x2  // Checks for bad blocks erasing the block,
                                  //   writing and reading all pages,
                                  //   and comparing the buffers
+
+enum app_blk_md_flags {
+    APP_BLK_MD_USED = (1 << 0),
+    APP_BLK_MD_OPEN = (1 << 1),
+    APP_BLK_MD_LINE = (1 << 2),
+    APP_BLK_MD_AVLB = (1 << 3)  /* Available: Good block and not reserved */
+};
+
+enum app_pg_type {
+    APP_PG_RESERVED  = 0x0,
+    APP_PG_NAMESPACE = 0x1,
+    APP_PG_MAP       = 0x2,
+    APP_PG_PADDING   = 0x3
+};
+
+/* ------- APPNVM MODULE IDS ------- */
+
+#define APPNVM_MOD_COUNT        9
+#define APPNVM_FN_SLOTS         32
+
+enum appnvm_mod_types {
+    APPMOD_BBT      = 0x0,
+    APPMOD_BLK_MD   = 0x1,
+    APPMOD_CH_PROV  = 0x2,
+    APPMOD_GL_PROV  = 0x3,
+    APPMOD_CH_MAP   = 0x4,
+    APPMOD_GL_MAP   = 0x5,
+    APPMOD_PPA_IO   = 0x6,
+    APPMOD_LBA_IO   = 0x7,
+    APPMOD_GC       = 0x8
+};
+
+/* Bad block table modules */
+#define APPFTL_BBT      0x1
+
+/* Block meta-data modules */
+#define APPFTL_BLK_MD   0x1
+
+/* Channel provisioning modules */
+#define APPFTL_CH_PROV  0x1
+
+/* Global provisioning modules */
+#define APPFTL_GL_PROV  0x1
+
+/* Channel mapping modules */
+#define APPFTL_CH_MAP   0x1
+
+/* Global mapping modules */
+#define APPFTL_GL_MAP   0x1
+
+/* Back-end PPA I/O modules */
+#define APPFTL_PPA_IO   0x1
+
+/* Front-end LBA I/O modules */
+#define APPFTL_LBA_IO   0x1
+
+/* Garbage Collection modules */
+#define APPFTL_GC       0x1
+
+enum app_gl_functions {
+    APP_FN_GLOBAL   = 0
+};
+
+/* ------- APPNVM MEMORY STRUCTS ------- */
 
 struct app_l2p_entry {
     uint64_t laddr;
@@ -120,20 +188,6 @@ struct app_io_data {
     uint32_t            meta_sz;
     uint32_t            buf_sz;
     uint8_t            *mod_oob; /* OOB as SGL can be buffered here */
-};
-
-enum app_pg_type {
-    APP_PG_RESERVED  = 0x0,
-    APP_PG_NAMESPACE = 0x1,
-    APP_PG_MAP       = 0x2,
-    APP_PG_PADDING   = 0x3
-};
-
-enum app_blk_md_flags {
-    APP_BLK_MD_USED = (1 << 0),
-    APP_BLK_MD_OPEN = (1 << 1),
-    APP_BLK_MD_LINE = (1 << 2),
-    APP_BLK_MD_AVLB = (1 << 3)  /* Available: Good block and not reserved */
 };
 
 struct app_blk_md_entry {
@@ -195,6 +249,8 @@ struct app_channel {
     uint16_t                map_blk;  /* Rsvd blk ID for mapping metadata */
     LIST_ENTRY(app_channel) entry;
 };
+
+/* ------- APPNVM MODULE FUNCTIONS DEFITION ------- */
 
 typedef int                 (app_ch_init)(struct nvm_channel *, uint16_t);
 typedef void                (app_ch_exit)(struct app_channel *);
@@ -260,6 +316,7 @@ struct app_channels {
 };
 
 struct app_global_bbt {
+    uint8_t              mod_id;
     app_bbt_create      *create_fn;
     app_bbt_flush       *flush_fn;
     app_bbt_load        *load_fn;
@@ -267,6 +324,7 @@ struct app_global_bbt {
 };
 
 struct app_global_md {
+     uint8_t            mod_id;
     app_md_create      *create_fn;
     app_md_flush       *flush_fn;
     app_md_load        *load_fn;
@@ -275,6 +333,7 @@ struct app_global_md {
 };
 
 struct app_ch_prov {
+     uint8_t                 mod_id;
     app_ch_prov_init        *init_fn;
     app_ch_prov_exit        *exit_fn;
     app_ch_prov_check_gc    *check_gc_fn;
@@ -283,6 +342,7 @@ struct app_ch_prov {
 };
 
 struct app_gl_prov {
+     uint8_t                   mod_id;
     app_gl_prov_init          *init_fn;
     app_gl_prov_exit          *exit_fn;
     app_gl_prov_get_ppa_list  *get_ppa_list_fn;
@@ -290,6 +350,7 @@ struct app_gl_prov {
 };
 
 struct app_ch_map {
+    uint8_t              mod_id;
     app_ch_map_create   *create_fn;
     app_ch_map_load     *load_fn;
     app_ch_map_flush    *flush_fn;
@@ -297,6 +358,7 @@ struct app_ch_map {
 };
 
 struct app_gl_map {
+    uint8_t               mod_id;
     app_gl_map_init      *init_fn;
     app_gl_map_exit      *exit_fn;
     app_gl_map_upsert_md *upsert_md_fn;
@@ -305,11 +367,13 @@ struct app_gl_map {
 };
 
 struct app_ppa_io {
+    uint8_t              mod_id;
     app_ppa_io_submit   *submit_fn;
     app_ppa_io_callback *callback_fn;
 };
 
 struct app_lba_io {
+    uint8_t              mod_id;
     app_lba_io_init     *init_fn;
     app_lba_io_exit     *exit_fn;
     app_lba_io_submit   *submit_fn;
@@ -317,6 +381,7 @@ struct app_lba_io {
 };
 
 struct app_gc {
+    uint8_t              mod_id;
     app_gc_init         *init_fn;
     app_gc_exit         *exit_fn;
     app_gc_target       *target_fn;
@@ -325,18 +390,20 @@ struct app_gc {
 
 struct app_global {
     struct app_channels     channels;
-    struct app_global_bbt   bbt;
-    struct app_global_md    md;
-    struct app_ch_prov      ch_prov;
-    struct app_gl_prov      gl_prov;
-    struct app_ch_map       ch_map;
-    struct app_gl_map       gl_map;
-    struct app_ppa_io       ppa_io;
-    struct app_lba_io       lba_io;
-    struct app_gc           gc;
+
+    void                    *mod_list[APPNVM_MOD_COUNT][APPNVM_FN_SLOTS];
+    struct app_global_bbt   *bbt;
+    struct app_global_md    *md;
+    struct app_ch_prov      *ch_prov;
+    struct app_gl_prov      *gl_prov;
+    struct app_ch_map       *ch_map;
+    struct app_gl_map       *gl_map;
+    struct app_ppa_io       *ppa_io;
+    struct app_lba_io       *lba_io;
+    struct app_gc           *gc;
 };
 
-/* Inline Functions */
+/* ------- INLINE FUNCTIONS ------- */
 
 inline int appnvm_ch_active (struct app_channel *lch)
 {
@@ -408,6 +475,8 @@ inline void appnvm_ch_dec_thread (struct app_channel *lch)
     pthread_spin_unlock (&lch->flags.busy_spin);
 }
 
+/* ------- GENERAL USE FUNCTIONS ------- */
+
 struct  app_io_data *app_alloc_pg_io (struct app_channel *lch);
 void    app_pg_io_prepare (struct app_channel *lch, struct app_io_data *data);
 void    app_free_pg_io (struct app_io_data *data);
@@ -422,7 +491,14 @@ int     app_nvm_seq_transfer (struct app_io_data *io, struct nvm_ppa_addr *ppa,
         size_t entry_sz, uint8_t direction, uint8_t reserved);
 int     app_get_ch_list (struct app_channel **list);
 
+/* ------- APPNVM CORE FUNCTIONS ------- */
+
 struct app_global *appnvm (void);
+int                appnvm_mod_register(uint8_t modtype, uint8_t id, void *mod);
+int                appnvm_mod_set (uint8_t *modset);
+
+/* ------- APPNVM MODULES REGISTRATION ------- */
+
 void channels_register (void);
 void bbt_byte_register (void);
 void blk_md_register (void);

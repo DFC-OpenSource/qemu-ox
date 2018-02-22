@@ -152,7 +152,7 @@ REDIST:
             /* Get all pages per channel at once */
             list = calloc (sizeof (struct nvm_ppa_addr) * nppas, 1);
 
-            if (appnvm()->ch_prov.get_ppas_fn (
+            if (appnvm()->ch_prov->get_ppas_fn (
                                         ch[ch_id], list, pgs_ch[act_ch_id])) {
                 /* Mark the channel as inactive and redistribute the remaining
                  * pages */
@@ -262,9 +262,14 @@ static void gl_prov_free_ppa_list (struct app_prov_ppas *ppas)
     free (ppas);
 }
 
+static struct app_gl_prov appftl_gl_prov = {
+    .mod_id           = APPFTL_GL_PROV,
+    .init_fn          = gl_prov_init,
+    .exit_fn          = gl_prov_exit,
+    .get_ppa_list_fn  = gl_prov_get_ppa_list,
+    .free_ppa_list_fn = gl_prov_free_ppa_list
+};
+
 void gl_prov_register (void) {
-    appnvm()->gl_prov.init_fn = gl_prov_init;
-    appnvm()->gl_prov.exit_fn = gl_prov_exit;
-    appnvm()->gl_prov.get_ppa_list_fn = gl_prov_get_ppa_list;
-    appnvm()->gl_prov.free_ppa_list_fn = gl_prov_free_ppa_list;
+    appnvm_mod_register (APPMOD_GL_PROV, APPFTL_GL_PROV, &appftl_gl_prov);
 }

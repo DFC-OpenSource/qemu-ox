@@ -96,7 +96,7 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
     struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
     struct ch_prov_blk *vblk = &(prov->prov_vblks[lun][blk]);
 
-    uint8_t *bbt = appnvm()->bbt.get_fn (lch, lun);
+    uint8_t *bbt = appnvm()->bbt->get_fn (lch, lun);
 
     vblk->state = malloc(sizeof (uint8_t) * n_pl);
     if (vblk->state == NULL)
@@ -104,7 +104,7 @@ static int ch_prov_blk_alloc(struct app_channel *lch, int lun, int blk)
 
     vblk->addr.ppa = prov->luns[lun].addr.ppa;
     vblk->addr.g.blk = blk;
-    vblk->blk_md = &appnvm()->md.get_fn (lch, lun)[blk];
+    vblk->blk_md = &appnvm()->md->get_fn (lch, lun)[blk];
 
     for (pl = 0; pl < lch->ch->geometry->n_of_planes; pl++) {
         vblk->state[pl] = bbt[n_pl * blk + pl];
@@ -391,7 +391,7 @@ NEXT:
 
         memset (vblk->blk_md->pg_state, 0x0, 1024);
 
-        appnvm()->ch_prov.check_gc_fn (lch);
+        appnvm()->ch_prov->check_gc_fn (lch);
 
         if (APPNVM_DEBUG_CH_PROV) {
             printf("[appnvm (ch_prov): blk GET: (%d/%d/%d/%d) - Free: %d,"
@@ -686,10 +686,16 @@ FULL:
     return -1;
 }
 
-void ch_prov_register (void) {
-    appnvm()->ch_prov.init_fn = ch_prov_init;
-    appnvm()->ch_prov.exit_fn = ch_prov_exit;
-    appnvm()->ch_prov.check_gc_fn = ch_prov_check_gc;
-    appnvm()->ch_prov.put_blk_fn = ch_prov_blk_put;
-    appnvm()->ch_prov.get_ppas_fn = ch_prov_get_ppas;
+static struct app_ch_prov appftl_ch_prov = {
+    .mod_id       = APPFTL_CH_PROV,
+    .init_fn      = ch_prov_init,
+    .exit_fn      = ch_prov_exit,
+    .check_gc_fn  = ch_prov_check_gc,
+    .put_blk_fn   = ch_prov_blk_put,
+    .get_ppas_fn  = ch_prov_get_ppas
+};
+
+void ch_prov_register (void)
+{
+    appnvm_mod_register (APPMOD_CH_PROV, APPFTL_CH_PROV, &appftl_ch_prov);
 }

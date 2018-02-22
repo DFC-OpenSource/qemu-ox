@@ -110,7 +110,7 @@ static struct app_blk_md_entry **gc_get_target_blks (struct app_channel *lch,
 
     for (lun_i = 0; lun_i < lch->ch->geometry->lun_per_ch; lun_i++) {
 
-        lun = appnvm()->md.get_fn (lch, lun_i);
+        lun = appnvm()->md->get_fn (lch, lun_i);
         if (!lun) {
             *c = 0;
             return NULL;
@@ -180,7 +180,7 @@ static int gc_proc_mapping_pg (struct app_channel *lch, struct app_io_data *io,
 {
     struct nvm_ppa_addr ppa_list[lch->ch->geometry->sec_per_pl_pg];
 
-    if (appnvm()->ch_prov.get_ppas_fn (lch, ppa_list, 1))
+    if (appnvm()->ch_prov->get_ppas_fn (lch, ppa_list, 1))
         return -1;
 
     if (app_pg_io (lch, MMGR_WRITE_PG, (void **) io->pl_vec, ppa_list))
@@ -190,13 +190,13 @@ static int gc_proc_mapping_pg (struct app_channel *lch, struct app_io_data *io,
          * current block and abort any write to the blocks,
          * otherwise we loose the blk sequential writes guarantee */
 
-    if (appnvm()->gl_map.upsert_md_fn (oob->lba, ppa_list[0].ppa, old_ppa->ppa))
+    if (appnvm()->gl_map->upsert_md_fn (oob->lba, ppa_list[0].ppa, old_ppa->ppa))
         goto ERR;
 
     return 0;
 
 ERR:
-    appnvm()->md.invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
+    appnvm()->md->invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
     return -1;
 }
 
@@ -244,7 +244,7 @@ static uint8_t gc_process_pg (struct app_channel *lch, struct app_io_data *io,
     uint16_t sec_i = 0, ret = 0;
 
     /* Write page to the same channel to keep the parallelism */
-    if (appnvm()->ch_prov.get_ppas_fn (lch, ppa_list, 1))
+    if (appnvm()->ch_prov->get_ppas_fn (lch, ppa_list, 1))
         return ret;
 
     if (app_pg_io (lch, MMGR_WRITE_PG, (void **) io->pl_vec, ppa_list)) {
@@ -260,14 +260,14 @@ static uint8_t gc_process_pg (struct app_channel *lch, struct app_io_data *io,
 
         /* Invalidate padded sectors */
         if (sec_i >= n_sec) {
-            appnvm()->md.invalidate_fn
+            appnvm()->md->invalidate_fn
                                    (lch, &ppa_list[sec_i], APP_INVALID_SECTOR);
             continue;
         }
 
         oob = (struct app_pg_oob *) io->oob_vec[sec_i];
-        if (appnvm()->gl_map.upsert_fn (oob->lba, ppa_list[sec_i].ppa)) {
-            appnvm()->md.invalidate_fn
+        if (appnvm()->gl_map->upsert_fn (oob->lba, ppa_list[sec_i].ppa)) {
+            appnvm()->md->invalidate_fn
                                    (lch, &ppa_list[sec_i], APP_INVALID_SECTOR);
             continue;
         }
@@ -277,7 +277,7 @@ static uint8_t gc_process_pg (struct app_channel *lch, struct app_io_data *io,
     return ret;
 
 INV_PG:
-    appnvm()->md.invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
+    appnvm()->md->invalidate_fn (lch, ppa_list, APP_INVALID_PAGE);
     return 0;
 }
 
@@ -298,7 +298,7 @@ static int gc_move_sector (struct app_channel *lch, struct app_io_data *w_io,
         case APP_PG_NAMESPACE:
             break;
         case APP_PG_PADDING:
-            appnvm()->md.invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
+            appnvm()->md->invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
             gc_pad_sec++;
             return -1;
         case APP_PG_MAP:
@@ -328,7 +328,7 @@ ERR:
             "(%d/%d/%d/%d/%d/%d)\n", sec_oob->pg_type, sec_oob->lba,
             old_ppa->g.ch, old_ppa->g.lun, old_ppa->g.blk,
             old_ppa->g.pl, old_ppa->g.pg, old_ppa->g.sec);
-            appnvm()->md.invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
+            appnvm()->md->invalidate_fn (lch, old_ppa, APP_INVALID_SECTOR);
     return -1;
 }
 
@@ -421,7 +421,7 @@ static int gc_recycle_blks (struct app_channel *lch,
         gc_moved_sec += blk_sec;
         count_sec += blk_sec;
 
-        blk_sec = appnvm()->gc.recycle_fn (lch, list[blk_i], tid, &failed_sec);
+        blk_sec = appnvm()->gc->recycle_fn (lch, list[blk_i], tid, &failed_sec);
         if (blk_sec < 0) {
             log_err ("[appnvm (gc): Process block failed.]");
             continue;
@@ -429,7 +429,7 @@ static int gc_recycle_blks (struct app_channel *lch,
 
         if (!failed_sec) {
             /* Put the block back in the channel provisioning */
-            if (appnvm()->ch_prov.put_blk_fn (lch, list[blk_i]->ppa.g.lun,
+            if (appnvm()->ch_prov->put_blk_fn (lch, list[blk_i]->ppa.g.lun,
                                                      list[blk_i]->ppa.g.blk)) {
                 log_err ("[appnvm (gc): Put block failed (%d/%d/%d)]",
                         list[blk_i]->ppa.g.ch, list[blk_i]->ppa.g.lun,
@@ -485,7 +485,7 @@ static void *gc_run_ch (void *arg)
             if (!appnvm_ch_nthreads (lch)) {
                 loop = 0;
 
-                list = appnvm()->gc.target_fn (lch, &victims);
+                list = appnvm()->gc->target_fn (lch, &victims);
                 if (!list || !victims) {
                     usleep (APP_GC_DELAY_US);
                     break;
@@ -507,7 +507,7 @@ static void *gc_run_ch (void *arg)
 
         appnvm_ch_need_gc_unset (lch);
         if (victims)
-            appnvm()->ch_prov.check_gc_fn (lch);
+            appnvm()->ch_prov->check_gc_fn (lch);
         appnvm_ch_active_set (lch);
     };
 
@@ -719,10 +719,15 @@ static void gc_exit (void)
     free (ch);
 }
 
+static struct app_gc appftl_gc = {
+    .mod_id     = APPFTL_GC,
+    .init_fn    = gc_init,
+    .exit_fn    = gc_exit,
+    .target_fn  = gc_get_target_blks,
+    .recycle_fn = gc_process_blk
+};
+
 void gc_register (void)
 {
-    appnvm()->gc.init_fn    = gc_init;
-    appnvm()->gc.exit_fn    = gc_exit;
-    appnvm()->gc.target_fn  = gc_get_target_blks;
-    appnvm()->gc.recycle_fn = gc_process_blk;
+    appnvm_mod_register (APPMOD_GC, APPFTL_GC, &appftl_gc);
 }

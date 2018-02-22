@@ -168,11 +168,15 @@ static struct app_map_entry *ch_map_get (struct app_channel *lch, uint32_t off)
                              ((struct app_map_entry *) lch->map_md->tbl) + off;
 }
 
-void ch_map_register (void) {
-    appnvm()->ch_map.create_fn = ch_map_create;
-    appnvm()->ch_map.load_fn = ch_map_load;
-    appnvm()->ch_map.flush_fn = ch_map_flush;
-    appnvm()->ch_map.get_fn = ch_map_get;
+static struct app_ch_map appftl_ch_map = {
+    .mod_id     = APPFTL_CH_MAP,
+    .create_fn  = ch_map_create,
+    .load_fn    = ch_map_load,
+    .flush_fn   = ch_map_flush,
+    .get_fn     = ch_map_get
+};
 
+void ch_map_register (void) {
     map_new = 0;
+    appnvm_mod_register (APPMOD_CH_MAP, APPFTL_CH_MAP, &appftl_ch_map);
 }

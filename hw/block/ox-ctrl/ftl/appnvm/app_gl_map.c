@@ -99,7 +99,7 @@ static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
     struct app_io_data *io;
     int sec, ret = -1;
 
-    prov_ppa = appnvm()->gl_prov.get_ppa_list_fn (1);
+    prov_ppa = appnvm()->gl_prov->get_ppa_list_fn (1);
     if (!prov_ppa) {
         log_err ("[appnvm (gl_map): I/O error. No PPAs available.]");
         return -1;
@@ -132,7 +132,7 @@ static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
     app_free_pg_io(io);
 
 FREE_PPA:
-    appnvm()->gl_prov.free_ppa_list_fn (prov_ppa);
+    appnvm()->gl_prov->free_ppa_list_fn (prov_ppa);
     return ret;
 }
 
@@ -198,7 +198,7 @@ static int map_evict_pg_cache (struct map_cache *cache)
 
         /* Invalidate old page PPAs */
         if (old_ppa.ppa)
-            appnvm()->md.invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
+            appnvm()->md->invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
                                                              APP_INVALID_PAGE);
     }
 
@@ -382,7 +382,7 @@ static int map_init (void)
     /* Recalculate mapping metadata indexes if the table is new */
     if (map_new) {
         for (ch_i = 0; ch_i < app_nch; ch_i++)
-            appnvm()->ch_map.create_fn (ch[ch_i]);
+            appnvm()->ch_map->create_fn (ch[ch_i]);
         map_new = 0;
     }
 
@@ -426,7 +426,7 @@ static struct map_cache_entry *map_get_cache_entry (uint64_t lba)
     ch_map = (lba / map_ent_per_pg) % app_nch;
     pg_off = (lba / map_ent_per_pg) / app_nch;
 
-    md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
+    md_ent = appnvm()->ch_map->get_fn (ch[ch_map], pg_off);
     if (!md_ent) {
         log_err ("[appnvm (gl_map): Map MD page out of bounds. Ch %d\n",ch_map);
         return NULL;
@@ -480,7 +480,7 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
     ch_map = index % app_nch;
     pg_off = index / app_nch;
 
-    md_ent = appnvm()->ch_map.get_fn (ch[ch_map], pg_off);
+    md_ent = appnvm()->ch_map->get_fn (ch[ch_map], pg_off);
     if (!md_ent) {
         log_err ("[appnvm (gl_map): MD page out of bounds. Index %lu\n", index);
         return -1;
@@ -519,7 +519,7 @@ static int map_upsert_md (uint64_t index, uint64_t new_ppa, uint64_t old_ppa)
 
     ppa.ppa = old_ppa;
     if (old_ppa)
-        appnvm()->md.invalidate_fn (ch[ppa.g.ch], &ppa, APP_INVALID_PAGE);
+        appnvm()->md->invalidate_fn (ch[ppa.g.ch], &ppa, APP_INVALID_PAGE);
 
     return ret;
 }
@@ -556,7 +556,7 @@ static int map_upsert (uint64_t lba, uint64_t ppa)
     /* If LBA is not new, mark old PPA page as invalid for GC */
     old_ppa.ppa = map_ent->ppa;
     if (map_ent->ppa)
-        appnvm()->md.invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
+        appnvm()->md->invalidate_fn (ch[old_ppa.g.ch], &old_ppa,
                                                            APP_INVALID_SECTOR);
 
     pthread_spin_lock (&md_ch_spin[old_ppa.g.ch]);
@@ -598,10 +598,15 @@ static uint64_t map_read (uint64_t lba)
     return map_ent->ppa;
 }
 
+static struct app_gl_map appftl_gl_map = {
+    .mod_id         = APPFTL_GL_MAP,
+    .init_fn        = map_init,
+    .exit_fn        = map_exit,
+    .upsert_md_fn   = map_upsert_md,
+    .upsert_fn      = map_upsert,
+    .read_fn        = map_read
+};
+
 void gl_map_register (void) {
-    appnvm()->gl_map.init_fn        = map_init;
-    appnvm()->gl_map.exit_fn        = map_exit;
-    appnvm()->gl_map.upsert_md_fn   = map_upsert_md;
-    appnvm()->gl_map.upsert_fn      = map_upsert;
-    appnvm()->gl_map.read_fn        = map_read;
+    appnvm_mod_register (APPMOD_GL_MAP, APPFTL_GL_MAP, &appftl_gl_map);
 }

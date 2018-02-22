@@ -104,7 +104,7 @@ SUBMIT:
 
 COMPLETE:
     pthread_mutex_unlock (&cmd->mutex);
-    appnvm()->lba_io.callback_fn (cmd);
+    appnvm()->lba_io->callback_fn (cmd);
 
 RETURN:
     return 0;
@@ -252,7 +252,12 @@ static int ppa_io_submit (struct nvm_io_cmd *cmd)
     return 0;
 }
 
+static struct app_ppa_io appftl_ppa_io = {
+    .mod_id      = APPFTL_PPA_IO,
+    .submit_fn   = ppa_io_submit,
+    .callback_fn = ppa_io_callback
+};
+
 void ppa_io_register (void) {
-    appnvm()->ppa_io.submit_fn   = ppa_io_submit;
-    appnvm()->ppa_io.callback_fn = ppa_io_callback;
+    appnvm_mod_register (APPMOD_PPA_IO, APPFTL_PPA_IO, &appftl_ppa_io);
 }

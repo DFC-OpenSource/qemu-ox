@@ -363,9 +363,14 @@ static uint8_t *bbt_byte_get (struct app_channel *lch, uint16_t lun)
     return bbt->tbl + (lun * lun_sz);
 }
 
+static struct app_global_bbt appftl_bbt = {
+    .mod_id    = APPFTL_BBT,
+    .create_fn = bbt_byte_create,
+    .flush_fn  = bbt_byte_flush,
+    .load_fn   = bbt_byte_load,
+    .get_fn    = bbt_byte_get
+};
+
 void bbt_byte_register (void) {
-    appnvm()->bbt.create_fn = bbt_byte_create;
-    appnvm()->bbt.flush_fn = bbt_byte_flush;
-    appnvm()->bbt.load_fn = bbt_byte_load;
-    appnvm()->bbt.get_fn = bbt_byte_get;
+    appnvm_mod_register (APPMOD_BBT, APPFTL_BBT, &appftl_bbt);
 }

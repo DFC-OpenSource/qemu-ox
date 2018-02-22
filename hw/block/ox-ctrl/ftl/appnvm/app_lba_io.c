@@ -160,7 +160,7 @@ COMPLETE_CMD:
     if (cmd->cmdtype == MMGR_WRITE_PG && !last_lba) {
         log_info ("[appnvm(lba_io): Freeing PPAs. GC not synchronized.]");
         if (lcmd->prov) {
-            appnvm()->gl_prov.free_ppa_list_fn (lcmd->prov);
+            appnvm()->gl_prov->free_ppa_list_fn (lcmd->prov);
             lcmd->prov = NULL;
         }
     }
@@ -354,7 +354,7 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
     if (!lcmd->oob_lba)
         return 1;
 
-    ppas = appnvm()->gl_prov.get_ppa_list_fn (pgs);
+    ppas = appnvm()->gl_prov->get_ppa_list_fn (pgs);
     if (!ppas || ppas->nppas < nlb) {
         free (lcmd->oob_lba);
         return 1;
@@ -398,7 +398,7 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
 
     lba_io_prepare_cmd (lcmd, LBA_IO_WRITE_Q);
 
-    if (appnvm()->ppa_io.submit_fn (cmd)) {
+    if (appnvm()->ppa_io->submit_fn (cmd)) {
         /* TODO: Invalidate pages in blk_md for failed write */
 
         /* TODO: If PPA IO is failed, tell provisioning to recycle current
@@ -417,7 +417,7 @@ FREE:
         lcmd->oob_lba = NULL;
     }
     if (lcmd->prov) {
-        appnvm()->gl_prov.free_ppa_list_fn (ppas);
+        appnvm()->gl_prov->free_ppa_list_fn (ppas);
         lcmd->prov = NULL;
     }
     pthread_mutex_unlock (&lcmd->mutex);
@@ -448,7 +448,7 @@ static int lba_io_read (struct lba_io_cmd *lcmd)
 
     for (sec_i = 0; sec_i < nlb; sec_i++) {
 
-        sec_ppa.ppa = appnvm()->gl_map.read_fn
+        sec_ppa.ppa = appnvm()->gl_map->read_fn
                                           (rw_line[LBA_IO_READ_Q][sec_i]->lba);
         if (sec_ppa.ppa == AND64) {
             free (lcmd->oob_lba);
@@ -466,7 +466,7 @@ static int lba_io_read (struct lba_io_cmd *lcmd)
 
     lba_io_prepare_cmd (lcmd, LBA_IO_READ_Q);
 
-    ret = appnvm()->ppa_io.submit_fn (cmd);
+    ret = appnvm()->ppa_io->submit_fn (cmd);
 
     pthread_mutex_lock (&lcmd->mutex);
     if (ret && lcmd->oob_lba)
@@ -578,12 +578,12 @@ static void lba_io_upsert_map (struct nvm_io_cmd *cmd)
         ent = (struct lba_io_sec_ent *) cmd->mmgr_io[sec / 4].rsvd;
         ent = ent + (sec % 4);
 
-        old_ppa = appnvm()->gl_map.read_fn (ent->lba);
+        old_ppa = appnvm()->gl_map->read_fn (ent->lba);
         if (old_ppa == AND64)
             goto ROLLBACK;
 
         pthread_mutex_lock (&gc_ns_mutex);
-        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa)) {
+        if (appnvm()->gl_map->upsert_fn (ent->lba, ent->ppa)) {
             pthread_mutex_unlock (&gc_ns_mutex);
             goto ROLLBACK;
         }
@@ -599,7 +599,7 @@ ROLLBACK:
         sec--;
         ent = (struct lba_io_sec_ent *) cmd->mmgr_io[sec / 4].rsvd;
         ent = ent + (sec % 4);
-        if (appnvm()->gl_map.upsert_fn (ent->lba, ent->ppa))
+        if (appnvm()->gl_map->upsert_fn (ent->lba, ent->ppa))
             log_err ("[lba_io: Failed to rollback failed upserted LBAs. "
                                 "LBA: %lu, nlbas: %d]", ent->lba - sec, sec);
     }
@@ -617,7 +617,7 @@ static void lba_io_free_ppas (struct nvm_io_cmd *cmd)
         ent = ent + (sec % 4);
 
         if (ent->prov) {
-            appnvm()->gl_prov.free_ppa_list_fn (ent->prov);
+            appnvm()->gl_prov->free_ppa_list_fn (ent->prov);
             ent->prov = NULL;
         }
     }
@@ -658,7 +658,7 @@ static void lba_io_sec_callback (void *opaque)
 
 ERR_TIMEOUT:
     if (lba->type == LBA_IO_WRITE_Q && lba->prov)
-        appnvm()->gl_prov.free_ppa_list_fn (lba->prov);
+        appnvm()->gl_prov->free_ppa_list_fn (lba->prov);
 
     lba->nvme = NULL;
     lba->prov = NULL;
@@ -800,9 +800,14 @@ static void lba_io_exit (void)
     free (ch);
 }
 
+static struct app_lba_io appftl_lba_io = {
+    .mod_id      = APPFTL_LBA_IO,
+    .init_fn     = lba_io_init,
+    .exit_fn     = lba_io_exit,
+    .submit_fn   = lba_io_submit,
+    .callback_fn = lba_io_callback
+};
+
 void lba_io_register (void) {
-    appnvm()->lba_io.init_fn     = lba_io_init;
-    appnvm()->lba_io.exit_fn     = lba_io_exit;
-    appnvm()->lba_io.submit_fn   = lba_io_submit;
-    appnvm()->lba_io.callback_fn = lba_io_callback;
+    appnvm_mod_register (APPMOD_LBA_IO, APPFTL_LBA_IO, &appftl_lba_io);
 }
