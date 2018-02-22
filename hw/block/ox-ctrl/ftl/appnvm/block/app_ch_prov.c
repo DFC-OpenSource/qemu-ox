@@ -334,7 +334,8 @@ static void ch_prov_check_gc (struct app_channel *lch)
  * If the block fails to erase, mark it as bad and try next block.
  * @return the pointer to the new open block
  */
-static struct ch_prov_blk *ch_prov_blk_get (struct app_channel *lch, int lun)
+static struct ch_prov_blk *ch_prov_blk_get (struct app_channel *lch,
+                                                                  uint16_t lun)
 {
     int ret, pl;
     int n_pl = lch->ch->geometry->n_of_planes;
@@ -686,12 +687,23 @@ FULL:
     return -1;
 }
 
+static struct app_blk_md_entry *ch_prov_get_blk (struct app_channel *lch,
+                                                                  uint16_t lun)
+{
+    struct ch_prov_blk *blk = ch_prov_blk_get (lch, lun);
+    if (!blk)
+        return NULL;
+
+    return blk->blk_md;
+}
+
 static struct app_ch_prov appftl_ch_prov = {
     .mod_id       = APPFTL_CH_PROV,
     .init_fn      = ch_prov_init,
     .exit_fn      = ch_prov_exit,
     .check_gc_fn  = ch_prov_check_gc,
     .put_blk_fn   = ch_prov_blk_put,
+    .get_blk_fn   = ch_prov_get_blk,
     .get_ppas_fn  = ch_prov_get_ppas
 };
 

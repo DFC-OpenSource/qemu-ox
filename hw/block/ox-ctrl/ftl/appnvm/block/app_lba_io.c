@@ -160,7 +160,7 @@ COMPLETE_CMD:
     if (cmd->cmdtype == MMGR_WRITE_PG && !last_lba) {
         log_info ("[appnvm(lba_io): Freeing PPAs. GC not synchronized.]");
         if (lcmd->prov) {
-            appnvm()->gl_prov->free_ppa_list_fn (lcmd->prov);
+            appnvm()->gl_prov->free_fn (lcmd->prov);
             lcmd->prov = NULL;
         }
     }
@@ -354,7 +354,7 @@ static int lba_io_write (struct lba_io_cmd *lcmd)
     if (!lcmd->oob_lba)
         return 1;
 
-    ppas = appnvm()->gl_prov->get_ppa_list_fn (pgs);
+    ppas = appnvm()->gl_prov->new_fn (pgs);
     if (!ppas || ppas->nppas < nlb) {
         free (lcmd->oob_lba);
         return 1;
@@ -417,7 +417,7 @@ FREE:
         lcmd->oob_lba = NULL;
     }
     if (lcmd->prov) {
-        appnvm()->gl_prov->free_ppa_list_fn (ppas);
+        appnvm()->gl_prov->free_fn (ppas);
         lcmd->prov = NULL;
     }
     pthread_mutex_unlock (&lcmd->mutex);
@@ -617,7 +617,7 @@ static void lba_io_free_ppas (struct nvm_io_cmd *cmd)
         ent = ent + (sec % 4);
 
         if (ent->prov) {
-            appnvm()->gl_prov->free_ppa_list_fn (ent->prov);
+            appnvm()->gl_prov->free_fn (ent->prov);
             ent->prov = NULL;
         }
     }
@@ -658,7 +658,7 @@ static void lba_io_sec_callback (void *opaque)
 
 ERR_TIMEOUT:
     if (lba->type == LBA_IO_WRITE_Q && lba->prov)
-        appnvm()->gl_prov->free_ppa_list_fn (lba->prov);
+        appnvm()->gl_prov->free_fn (lba->prov);
 
     lba->nvme = NULL;
     lba->prov = NULL;

@@ -266,8 +266,8 @@ static struct app_gl_prov appftl_gl_prov = {
     .mod_id           = APPFTL_GL_PROV,
     .init_fn          = gl_prov_init,
     .exit_fn          = gl_prov_exit,
-    .get_ppa_list_fn  = gl_prov_get_ppa_list,
-    .free_ppa_list_fn = gl_prov_free_ppa_list
+    .new_fn           = gl_prov_get_ppa_list,
+    .free_fn          = gl_prov_free_ppa_list
 };
 
 void gl_prov_register (void) {

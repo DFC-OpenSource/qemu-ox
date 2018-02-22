@@ -273,13 +273,15 @@ typedef int  (app_ch_prov_init) (struct app_channel *);
 typedef void (app_ch_prov_exit) (struct app_channel *);
 typedef void (app_ch_prov_check_gc) (struct app_channel *);
 typedef int  (app_ch_prov_put_blk) (struct app_channel *, uint16_t, uint16_t);
+typedef struct app_blk_md_entry *(app_ch_prov_get_blk) (struct app_channel *,
+                                                                     uint16_t);
 typedef int  (app_ch_prov_get_ppas)(struct app_channel *, struct nvm_ppa_addr *,
                                                                      uint16_t);
 
-typedef int  (app_gl_prov_init) (void);
-typedef void (app_gl_prov_exit) (void);
-typedef struct app_prov_ppas *(app_gl_prov_get_ppa_list) (uint32_t);
-typedef void (app_gl_prov_free_ppa_list) (struct app_prov_ppas *);
+typedef int                   (app_gl_prov_init) (void);
+typedef void                  (app_gl_prov_exit) (void);
+typedef struct app_prov_ppas *(app_gl_prov_new) (uint32_t);
+typedef void                  (app_gl_prov_free) (struct app_prov_ppas *);
 
 typedef int  (app_ch_map_create) (struct app_channel *);
 typedef int  (app_ch_map_load) (struct app_channel *);
@@ -324,7 +326,7 @@ struct app_global_bbt {
 };
 
 struct app_global_md {
-     uint8_t            mod_id;
+    uint8_t             mod_id;
     app_md_create      *create_fn;
     app_md_flush       *flush_fn;
     app_md_load        *load_fn;
@@ -333,20 +335,21 @@ struct app_global_md {
 };
 
 struct app_ch_prov {
-     uint8_t                 mod_id;
+    uint8_t                  mod_id;
     app_ch_prov_init        *init_fn;
     app_ch_prov_exit        *exit_fn;
     app_ch_prov_check_gc    *check_gc_fn;
     app_ch_prov_put_blk     *put_blk_fn;
+    app_ch_prov_get_blk     *get_blk_fn;
     app_ch_prov_get_ppas    *get_ppas_fn;
 };
 
 struct app_gl_prov {
-     uint8_t                   mod_id;
-    app_gl_prov_init          *init_fn;
-    app_gl_prov_exit          *exit_fn;
-    app_gl_prov_get_ppa_list  *get_ppa_list_fn;
-    app_gl_prov_free_ppa_list *free_ppa_list_fn;
+    uint8_t              mod_id;
+    app_gl_prov_init    *init_fn;
+    app_gl_prov_exit    *exit_fn;
+    app_gl_prov_new     *new_fn;
+    app_gl_prov_free    *free_fn;
 };
 
 struct app_ch_map {

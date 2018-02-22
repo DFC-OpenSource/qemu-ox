@@ -99,7 +99,7 @@ static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
     struct app_io_data *io;
     int sec, ret = -1;
 
-    prov_ppa = appnvm()->gl_prov->get_ppa_list_fn (1);
+    prov_ppa = appnvm()->gl_prov->new_fn (1);
     if (!prov_ppa) {
         log_err ("[appnvm (gl_map): I/O error. No PPAs available.]");
         return -1;
@@ -132,7 +132,7 @@ static int map_nvm_write (struct map_cache_entry *ent, uint64_t lba)
     app_free_pg_io(io);
 
 FREE_PPA:
-    appnvm()->gl_prov->free_ppa_list_fn (prov_ppa);
+    appnvm()->gl_prov->free_fn (prov_ppa);
     return ret;
 }
 
