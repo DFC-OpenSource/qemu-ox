@@ -408,45 +408,45 @@ struct app_global {
 
 /* ------- INLINE FUNCTIONS ------- */
 
-inline int appnvm_ch_active (struct app_channel *lch)
+static inline int appnvm_ch_active (struct app_channel *lch)
 {
     return lch->flags.active;
 }
 
-inline void appnvm_ch_active_set (struct app_channel *lch)
+static inline void appnvm_ch_active_set (struct app_channel *lch)
 {
     pthread_spin_lock (&lch->flags.active_spin);
     lch->flags.active = 1;
     pthread_spin_unlock (&lch->flags.active_spin);
 }
 
-inline void appnvm_ch_active_unset (struct app_channel *lch)
+static inline void appnvm_ch_active_unset (struct app_channel *lch)
 {
     pthread_spin_lock (&lch->flags.active_spin);
     lch->flags.active = 0;
     pthread_spin_unlock (&lch->flags.active_spin);
 }
 
-inline int appnvm_ch_need_gc (struct app_channel *lch)
+static inline int appnvm_ch_need_gc (struct app_channel *lch)
 {
     return lch->flags.need_gc;
 }
 
-inline void appnvm_ch_need_gc_set (struct app_channel *lch)
+static inline void appnvm_ch_need_gc_set (struct app_channel *lch)
 {
     pthread_spin_lock (&lch->flags.need_gc_spin);
     lch->flags.need_gc = 1;
     pthread_spin_unlock (&lch->flags.need_gc_spin);
 }
 
-inline void appnvm_ch_need_gc_unset (struct app_channel *lch)
+static inline void appnvm_ch_need_gc_unset (struct app_channel *lch)
 {
     pthread_spin_lock (&lch->flags.need_gc_spin);
     lch->flags.need_gc = 0;
     pthread_spin_unlock (&lch->flags.need_gc_spin);
 }
 
-inline int appnvm_ch_nthreads (struct app_channel *lch)
+static inline int appnvm_ch_nthreads (struct app_channel *lch)
 {
     int n;
 
@@ -457,7 +457,7 @@ inline int appnvm_ch_nthreads (struct app_channel *lch)
     return n;
 }
 
-inline void appnvm_ch_inc_thread (struct app_channel *lch)
+static inline void appnvm_ch_inc_thread (struct app_channel *lch)
 {
     int n;
 
@@ -467,7 +467,7 @@ inline void appnvm_ch_inc_thread (struct app_channel *lch)
     pthread_spin_unlock (&lch->flags.busy_spin);
 }
 
-inline void appnvm_ch_dec_thread (struct app_channel *lch)
+static inline void appnvm_ch_dec_thread (struct app_channel *lch)
 {
     int n;
 

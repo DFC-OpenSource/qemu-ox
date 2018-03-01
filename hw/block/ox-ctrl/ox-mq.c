@@ -186,7 +186,7 @@ CLEAN_SQ:
     return -1;
 }
 
-inline static void ox_mq_reset_entry (struct ox_mq_entry *entry)
+static inline void ox_mq_reset_entry (struct ox_mq_entry *entry)
 {
     entry->status = OX_MQ_FREE;
     entry->opaque = NULL;

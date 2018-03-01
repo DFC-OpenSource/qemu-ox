@@ -448,7 +448,9 @@ static int nvme_start_ctrl (NvmeCtrl *n)
 
 void nvme_free_sq (NvmeSQ *sq, NvmeCtrl *n)
 {
-    for (int i = 0; i < sq->size; i++)
+    uint32_t i;
+
+    for (i = 0; i < sq->size; i++)
         pthread_mutex_destroy (&sq->io_req[i].nvm_io.mutex);
 
     n->sq[sq->sqid] = NULL;

@@ -70,7 +70,7 @@ static void gl_prov_exit (void)
 
 static struct app_prov_ppas *gl_prov_get_ppa_list (uint32_t pgs)
 {
-    uint32_t ch_id, act_ch_id, nact_ch, cc, new_cc, nppas, tppas, pg_left;
+    uint32_t ch_id, act_ch_id, nact_ch, cc, new_cc, nppas, tppas, pg_left, i;
     struct app_prov_ppas      tmp_ppa[app_nch];
     struct app_channel       *dec_ch[app_nch];
     struct nvm_ppa_addr      *list;
@@ -228,7 +228,7 @@ REDIST:
     return prov_ppa;
 
 DEC_CH:
-    for (int i = 0; i < prov_ppa->nch; i++) {
+    for (i = 0; i < prov_ppa->nch; i++) {
         if (prov_ppa->ch[i] != NULL)
             appnvm_ch_dec_thread(prov_ppa->ch[i]);
     }
@@ -241,6 +241,8 @@ FREE_PPA:
 
 static void gl_prov_free_ppa_list (struct app_prov_ppas *ppas)
 {
+    uint32_t i;
+
     if (!ppas) {
         log_err ("[gl_prov (free_ppas): NULL pointer. Ch users is unstable.]");
         return;
@@ -249,7 +251,7 @@ static void gl_prov_free_ppa_list (struct app_prov_ppas *ppas)
     if (APPNVM_DEBUG_GL_PROV)
         printf ("\n[appnvm (gl_prov): FREE - %d ppas]\n", ppas->nppas);
 
-    for (int i = 0; i < ppas->nch; i++) {
+    for (i = 0; i < ppas->nch; i++) {
         if (ppas->ch[i] != NULL)
             appnvm_ch_dec_thread(ppas->ch[i]);
         if (APPNVM_DEBUG_GL_PROV)

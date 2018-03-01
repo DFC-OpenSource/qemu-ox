@@ -180,7 +180,7 @@ int app_blk_current_page (struct app_channel *lch, struct app_io_data *io,
     return (!ret) ? pg : -1;
 }
 
-inline static int app_pg_io_switch (struct app_channel *lch, uint8_t cmdtype,
+static inline int app_pg_io_switch (struct app_channel *lch, uint8_t cmdtype,
                     void **pl_vec, struct nvm_ppa_addr *ppa, uint8_t type)
 {
     switch (type) {
@@ -398,11 +398,11 @@ static int app_ftl_set_bbtbl (struct nvm_ppa_addr *ppa, uint8_t value)
 static void app_exit (void)
 {
     struct app_channel *lch[app_nch];
-    int nch = app_nch, nth, retry;
+    int nch = app_nch, nth, retry, i;
 
     appnvm()->channels.get_list_fn (lch, nch);
 
-    for (int i = 0; i < nch; i++) {
+    for (i = 0; i < nch; i++) {
 
         /* Check if channel is busy before exit */
         retry = 0;

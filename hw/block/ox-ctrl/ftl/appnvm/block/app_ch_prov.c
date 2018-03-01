@@ -458,7 +458,7 @@ static int ch_prov_blk_put(struct app_channel *lch, uint16_t lun, uint16_t blk)
  */
 static int ch_prov_renew_line (struct app_channel *lch)
 {
-    uint32_t lun, targets, i, found;
+    uint32_t lun, targets, i, found, j;
     struct ch_prov_blk *vblk;
     struct ch_prov_blk *line[APP_PROV_LINE];
     struct ch_prov *prov = (struct ch_prov *) lch->ch_prov;
@@ -538,7 +538,7 @@ NEXT_LUN:
 
     if (APPNVM_DEBUG_CH_PROV) {
         printf ("[appnvm (ch_prov): Line is renewed: ");
-        for (int j = 0; j < targets; j++)
+        for (j = 0; j < targets; j++)
             printf ("(%d %d %d)", prov->line.vblks[j]->addr.g.ch,
                                    prov->line.vblks[j]->addr.g.lun,
                                    prov->line.vblks[j]->addr.g.blk);
