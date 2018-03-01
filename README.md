@@ -22,9 +22,9 @@ device ox-ctrl params:
  
  'debug' -> If defined with positive value, OX starts in debug mode
 
- 'volt'  -> If defined with positive value, OX creates/loads/flushes a file as a disk (data is persisted)
+ 'volt'  -> If defined with positive value, OX starts with volatile storage            
+            If not defined or defined as zero, OX creates/loads/flushes a file as a disk (data is persisted)
             To persist the disk, please run 'sudo nvme reset /dev/nvme0' in the VM
-            If not defined or defined as zero, OX starts with volatile storage
 ```
 AppNVM mode runs a FTL in the device, for having the FTL in the host, please use 'pblk' in open-channel mode:
 ```
