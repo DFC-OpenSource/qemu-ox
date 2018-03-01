@@ -15,9 +15,6 @@ static void nvme_debug_print_io (NvmeRwCmd *cmd, uint32_t bs, uint64_t dt_sz,
         uint64_t md_sz, uint64_t elba, uint64_t *prp)
 {
     int i;
-    char buf[4096];
-
-    setbuffer (stdout, buf, 4096);
 
     printf("  fuse: %d, psdt: %d\n", cmd->fuse, cmd->psdt);
     printf("  number of LBAs: %d, bs: %d\n", cmd->nlb + 1, bs);
@@ -30,7 +27,6 @@ static void nvme_debug_print_io (NvmeRwCmd *cmd, uint32_t bs, uint64_t dt_sz,
         printf("  [prp(%d): 0x%016lx\n", i, prp[i]);
 
     fflush (stdout);
-    setlinebuf (stdout);
 }
 
 uint16_t nvme_identify (NvmeCtrl *n, NvmeCmd *cmd)

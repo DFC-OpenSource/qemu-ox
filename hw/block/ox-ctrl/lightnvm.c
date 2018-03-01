@@ -22,9 +22,6 @@ static void lnvm_debug_print_io (struct nvm_ppa_addr *list, uint64_t *prp,
                uint64_t *md_prp, uint16_t size, uint64_t dt_sz, uint64_t md_sz)
 {
     int i;
-    char buf[4096];
-
-    setbuffer (stdout, buf, 4096);
 
     printf(" Number of sectors: %d\n", size);
     printf(" DMA size: %lu (data) + %lu (meta) = %lu bytes\n",
@@ -37,7 +34,6 @@ static void lnvm_debug_print_io (struct nvm_ppa_addr *list, uint64_t *prp,
     printf (" [meta_prp(0): 0x%016lx\n", md_prp[0]);
 
     fflush (stdout);
-    setlinebuf (stdout);
 }
 
 void lnvm_set_default(LnvmCtrl *ctrl)
