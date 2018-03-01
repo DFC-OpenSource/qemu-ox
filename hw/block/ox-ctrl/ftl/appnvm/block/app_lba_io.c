@@ -189,10 +189,12 @@ static int lba_io_submit (struct nvm_io_cmd *cmd)
         goto REQUEUE;
 
     for (sec_i = 0; sec_i < cmd->n_sec; sec_i++) {
-        if (STAILQ_EMPTY(&flbahead))
-            goto REQUEUE;
-
         pthread_spin_lock (&sec_spin);
+        if (STAILQ_EMPTY(&flbahead)) {
+            pthread_spin_unlock (&sec_spin);
+            goto REQUEUE;
+        }
+
         lba[sec_i] = STAILQ_FIRST(&flbahead);
         if (!lba[sec_i]) {
             pthread_spin_unlock (&sec_spin);

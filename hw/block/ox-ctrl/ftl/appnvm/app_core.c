@@ -607,7 +607,7 @@ struct nvm_ftl_ops app_ops = {
 struct nvm_ftl app_ftl = {
     .ftl_id         = FTL_ID_APPNVM,
     .name           = "APPNVM",
-    .nq             = 2,
+    .nq             = 8,
     .ops            = &app_ops,
     .cap            = ZERO_32FLAG,
 };

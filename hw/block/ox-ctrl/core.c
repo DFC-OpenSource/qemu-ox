@@ -186,15 +186,21 @@ static uint16_t nvm_ftl_q_schedule (struct nvm_ftl *ftl,
     uint16_t qid;
 
     /* Separate writes and reads in different queues for AppNVM FTL */
-    if (ftl->ftl_id == FTL_ID_APPNVM)
-        return (cmd->cmdtype == MMGR_WRITE_PG) ? 0 : 1;
+    if (ftl->ftl_id == FTL_ID_APPNVM) {
+        qid = (cmd->cmdtype == MMGR_WRITE_PG) ? 0 : 1;
+
+        ftl->next_queue[qid] = (ftl->next_queue[qid] + 1 == ftl->nq / 2) ?
+                                                  0 : ftl->next_queue[qid] + 1;
+
+        return ftl->next_queue[qid] + (qid * (ftl->nq / 2));
+    }
 
     if (!multi_ch)
         return cmd->channel[0]->ch_id % ftl->nq;
     else {
-        qid = ftl->next_queue;
-        ftl->next_queue = (ftl->next_queue + 1 == ftl->nq) ?
-                                                       0 : ftl->next_queue + 1;
+        qid = ftl->next_queue[0];
+        ftl->next_queue[0] = (ftl->next_queue[0] + 1 == ftl->nq) ?
+                                                    0 : ftl->next_queue[0] + 1;
         return qid;
     }
 }
@@ -298,7 +304,8 @@ int nvm_register_ftl (struct nvm_ftl *ftl)
     if (!ftl->mq)
         return -1;
 
-    ftl->next_queue = 0;
+    ftl->next_queue[0] = 0;
+    ftl->next_queue[1] = 0;
 
     core.ftl_q_count += ftl->nq;
 

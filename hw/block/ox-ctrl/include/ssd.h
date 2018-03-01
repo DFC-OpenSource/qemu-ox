@@ -383,7 +383,7 @@ struct nvm_ftl {
     uint16_t                bbtbl_format;
     uint8_t                 nq; /* Number of queues/threads, up to 64 per FTL */
     struct ox_mq            *mq;
-    uint16_t                next_queue;
+    uint16_t                next_queue[2];
     LIST_ENTRY(nvm_ftl)     entry;
 };
 
