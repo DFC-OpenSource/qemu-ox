@@ -10,7 +10,7 @@ sudo apt-get install python libglib2.0-dev zlib1g-dev autoconf libtool libsdl-co
 
 If you are using gcc 7.x or higher, you might need to add the flags:
  -Wno-format-truncation
- -Wno-memset-elt-sizeto
+ -Wno-memset-elt-size
 to QEMU_CFLAGS in ./configure file 
 
 $ ./configure --target-list=x86_64-softmmu
